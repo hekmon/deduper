@@ -25,7 +25,7 @@ type TreeStat struct {
 	ChildrenAccess *sync.Mutex
 }
 
-func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, err error) {
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles uint64, err error) {
 	// Prepare to launch goroutines
 	var workers sync.WaitGroup
 	errChan := make(chan error)
@@ -59,6 +59,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		totalB := scannedB.Add(0)
 		total := totalA + totalB
 		fmt.Printf("Indexing done: %d files found ! (%d on path A and %d on path B)\n", total, totalA, totalB)
+		nbAFiles = totalA
 		close(loggerDone)
 	}()
 	defer loggerCtxCancel() // in case we do not reach the end of the fx
@@ -114,22 +115,22 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 
 func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Uint64, errChan chan<- error) {
 	var err error
-	stats := TreeStat{
+	self := TreeStat{
 		FullPath: pathScan,
 	}
 	// get infos
-	if stats.Infos, err = os.Lstat(pathScan); err != nil {
+	if self.Infos, err = os.Lstat(pathScan); err != nil {
 		errChan <- fmt.Errorf("failed to stat '%s': %w: this path won't be included in the scan", pathScan, err)
 		return
 	}
 	// if special file: skip
 	// fmt.Println(pathScan, "mode", fmt.Sprintf("%b", stats.Infos.Mode()), "special modes:", fmt.Sprintf("%b", specialFileModes), "comparaison &:", fmt.Sprintf("%b", stats.Infos.Mode()&specialFileModes))
-	if stats.Infos.Mode()&specialFileModes != 0 {
+	if self.Infos.Mode()&specialFileModes != 0 {
 		// fmt.Println("special file !", path.Join(pathScan, stats.Infos.Name()))
 		return
 	}
 	// if dir, scan it too
-	if stats.Infos.IsDir() {
+	if self.Infos.IsDir() {
 		// list dir
 		var entries []fs.DirEntry
 		if entries, err = os.ReadDir(pathScan); err != nil {
@@ -137,19 +138,19 @@ func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted
 			return
 		}
 		// process list
-		stats.Children = make([]*TreeStat, 0, len(entries))
-		stats.ChildrenAccess = new(sync.Mutex)
+		self.Children = make([]*TreeStat, 0, len(entries))
+		self.ChildrenAccess = new(sync.Mutex)
 		for _, entry := range entries {
 			// can we launch it concurrently ?
 			if tokenPool.TryAcquire(1) {
 				waitGroup.Add(1)
 				go func(localEntry fs.DirEntry) {
-					indexChild(path.Join(pathScan, localEntry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
+					indexChild(path.Join(pathScan, localEntry.Name()), &self, tokenPool, waitGroup, scanned, errChan)
 					tokenPool.Release(1)
 					waitGroup.Done()
 				}(entry)
 			} else {
-				indexChild(path.Join(pathScan, entry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
+				indexChild(path.Join(pathScan, entry.Name()), &self, tokenPool, waitGroup, scanned, errChan)
 			}
 		}
 	} else {
@@ -160,7 +161,7 @@ func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted
 	waitGroup.Add(1)
 	go func() {
 		parent.ChildrenAccess.Lock()
-		parent.Children = append(parent.Children, &stats)
+		parent.Children = append(parent.Children, &self)
 		parent.ChildrenAccess.Unlock()
 		waitGroup.Done()
 	}()
