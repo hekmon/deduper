@@ -89,7 +89,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 	if refFile.Infos.Size() == 0 {
 		return
 	}
-	// try to find candidates
+	// try to find candidates by size
 	candidates := findFileWithSize(refFile.Infos.Size(), pathBTree)
 	if len(candidates) == 0 {
 		return
@@ -100,8 +100,9 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
 		return
 	}
-	finalCandidates := make([]*TreeStat, 0, len(candidates))
+	var finalCandidates []*TreeStat
 	if refFileSystem.Nlink > 1 {
+		finalCandidates = make([]*TreeStat, 0, len(candidates))
 		// files has hard links, checking against candidates
 		for _, candidate := range candidates {
 			candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
@@ -116,6 +117,8 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			}
 			// TODO: test
 		}
+	} else {
+		finalCandidates = candidates
 	}
 	if len(finalCandidates) == 0 {
 		return
