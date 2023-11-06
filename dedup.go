@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gosuri/uiprogress"
@@ -94,23 +95,44 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		return
 	}
 	// Remove candidates that are already hardlink to reffile
-	//// TODO
-	if len(candidates) == 0 {
+	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
+	if !ok {
+		errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
+		return
+	}
+	finalCandidates := make([]*TreeStat, 0, len(candidates))
+	if refFileSystem.Nlink > 1 {
+		// files has hard links, checking against candidates
+		for _, candidate := range candidates {
+			candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
+			if !ok {
+				errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
+				continue
+			}
+			// check if inode is same
+			if candidateSystem.Ino != refFileSystem.Ino {
+				// different inodes, no hardlink between them
+				finalCandidates = append(finalCandidates, candidate)
+			}
+			// TODO: test
+		}
+	}
+	if len(finalCandidates) == 0 {
 		return
 	}
 	// candidates ready
-	fullPaths := make([]string, len(candidates))
-	for index, candidate := range candidates {
+	fullPaths := make([]string, len(finalCandidates))
+	for index, candidate := range finalCandidates {
 		fullPaths[index] = candidate.FullPath
 	}
-	fmt.Fprintf(progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n", refFile.FullPath, len(candidates), strings.Join(fullPaths, "', '"))
+	fmt.Fprintf(progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n", refFile.FullPath, len(finalCandidates), strings.Join(fullPaths, "', '"))
 	// create the progress bar for this file
-	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(candidates)+1)))
+	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(finalCandidates)+1)))
 	fileBar := progress.AddBar(int(totalSize.Byte())).AppendCompleted()
 	fileBar.Empty = ' '
 	fileBar.AppendFunc(func(b *uiprogress.Bar) string {
 		return fmt.Sprintf("%s + %d candidate(s) (hashing: %s/%s)",
-			refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
+			refFile.Infos.Name(), len(finalCandidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 	})
 	var totalWritten atomic.Int64
 	updateProgress := func(add int) {
@@ -133,7 +155,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 				errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 				return
 			}
-			fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", refFile.FullPath, originalHash)
+			fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 			tokenPool.Release(1)
 			localWaitGroup.Done()
 			waitGroup.Done()
@@ -144,11 +166,11 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
-		fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", refFile.FullPath, originalHash)
+		fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 	}
 	// compute checksums of the candidates and replace them if a match is found
-	candidatesHashes := make([][]byte, len(candidates))
-	for candidateIndex, candidate := range candidates {
+	candidatesHashes := make([][]byte, len(finalCandidates))
+	for candidateIndex, candidate := range finalCandidates {
 		// can we launch it concurrently ?
 		if tokenPool.TryAcquire(1) {
 			waitGroup.Add(1)
@@ -158,7 +180,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 					errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
 					return
 				}
-				fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", localCandidate.FullPath, *target)
+				fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
 				tokenPool.Release(1)
 				localWaitGroup.Done()
 				waitGroup.Done()
@@ -169,7 +191,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 				errChan <- fmt.Errorf("failed to compute hash of ref file %s: %w", candidate.FullPath, err)
 				return
 			}
-			fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %x\n", candidate.FullPath, candidatesHashes[candidateIndex])
+			fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", candidate.FullPath, candidatesHashes[candidateIndex])
 		}
 	}
 	localWaitGroup.Wait()

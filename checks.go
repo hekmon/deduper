@@ -81,12 +81,12 @@ func validatePath(pathCandidate string) (pathStat fs.FileInfo, err error) {
 }
 
 func getDeviceID(pathStat fs.FileInfo) (deviceID uint64, err error) {
-	switch system := pathStat.Sys().(type) {
-	case *syscall.Stat_t:
-		deviceID = system.Dev
-	default:
+	system, ok := pathStat.Sys().(*syscall.Stat_t)
+	if !ok {
 		err = fmt.Errorf("backing storage device can not be checked: excepting '*syscall.Stat_t' got '%v'", system)
+		return
 	}
+	deviceID = system.Dev
 	return
 }
 

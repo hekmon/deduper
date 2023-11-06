@@ -13,7 +13,7 @@ func main() {
 	// Set flags
 	sideA := flag.String("sideA", "", "Referential directory")
 	sideB := flag.String("sideB", "", "Second directory to compare side A against")
-	concurrency := flag.Int("concurrency", runtime.NumCPU(), "Control concurrency for scanning")
+	concurrency := flag.Int("concurrency", runtime.NumCPU(), "Set the maximum numbers of workers")
 	// noDryRun := flag.Bool("apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
 	flag.Parse()
 
