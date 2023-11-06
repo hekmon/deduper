@@ -31,10 +31,10 @@ func main() {
 	}
 	tokenPool := semaphore.NewWeighted(semaphoreSize)
 
-	// Launchprescan
-	pathATree, pathBTree, err := preScan(cleanPathA, cleanPathB, tokenPool)
+	// Start indexing
+	pathATree, pathBTree, err := index(cleanPathA, cleanPathB, tokenPool)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to prescan: %s\n", err)
+		fmt.Fprintf(os.Stderr, "failed to index directories: %s\n", err)
 		os.Exit(2)
 	}
 	fmt.Println(*pathATree, *pathBTree)

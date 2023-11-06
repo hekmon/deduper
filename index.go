@@ -25,7 +25,7 @@ type TreeStat struct {
 	ChildrenAccess *sync.Mutex
 }
 
-func preScan(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, err error) {
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, err error) {
 	// Prepare to launch goroutines
 	var workers sync.WaitGroup
 	errChan := make(chan error)
@@ -52,13 +52,13 @@ func preScan(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pat
 			case <-timer.C:
 				// proceed
 			}
-			fmt.Printf("[scanning] %d regular files scanned on path A | %d regular files scanned on path B\n",
+			fmt.Printf("[indexing] %d regular files found on path A | %d regular files found on path B\n",
 				scannedA.Add(0), scannedB.Add(0))
 		}
 		totalA := scannedA.Add(0)
 		totalB := scannedB.Add(0)
 		total := totalA + totalB
-		fmt.Printf("[done] %d files scanned ! (%d on path A and %d on path B)\n", total, totalA, totalB)
+		fmt.Printf("Indexing done: %d files found ! (%d on path A and %d on path B)\n", total, totalA, totalB)
 		close(loggerDone)
 	}()
 	defer loggerCtxCancel() // in case we do not reach the end of the fx
@@ -73,7 +73,7 @@ func preScan(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pat
 	}
 	workers.Add(1)
 	go func() {
-		preScanChild(pathA, &fakeAParent, tokenPool, &workers, scannedA, errChan)
+		indexChild(pathA, &fakeAParent, tokenPool, &workers, scannedA, errChan)
 		tokenPool.Release(1)
 		workers.Done()
 	}()
@@ -88,7 +88,7 @@ func preScan(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pat
 	}
 	workers.Add(1)
 	go func() {
-		preScanChild(pathB, &fakeBParent, tokenPool, &workers, scannedB, errChan)
+		indexChild(pathB, &fakeBParent, tokenPool, &workers, scannedB, errChan)
 		tokenPool.Release(1)
 		workers.Done()
 	}()
@@ -112,7 +112,7 @@ func preScan(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pat
 	return
 }
 
-func preScanChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Uint64, errChan chan<- error) {
+func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Uint64, errChan chan<- error) {
 	var err error
 	stats := TreeStat{
 		FullPath: pathScan,
@@ -144,12 +144,12 @@ func preScanChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weight
 			if tokenPool.TryAcquire(1) {
 				waitGroup.Add(1)
 				go func(localEntry fs.DirEntry) {
-					preScanChild(path.Join(pathScan, localEntry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
+					indexChild(path.Join(pathScan, localEntry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
 					tokenPool.Release(1)
 					waitGroup.Done()
 				}(entry)
 			} else {
-				preScanChild(path.Join(pathScan, entry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
+				indexChild(path.Join(pathScan, entry.Name()), &stats, tokenPool, waitGroup, scanned, errChan)
 			}
 		}
 	} else {
