@@ -37,7 +37,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to index directories: %s\n", err)
 		os.Exit(2)
 	}
+	fmt.Println()
 
 	// Start dedup
-	errors := dedup(pathATree, pathBTree, tokenPool, nbAFiles)
+	dedup(pathATree, pathBTree, tokenPool, nbAFiles)
 }

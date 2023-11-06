@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gosuri/uilive"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -25,21 +26,23 @@ type TreeStat struct {
 	ChildrenAccess *sync.Mutex
 }
 
-func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles uint64, err error) {
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64, err error) {
 	// Prepare to launch goroutines
 	var (
 		workers    sync.WaitGroup
 		errorsList []error
 	)
 	errChan := make(chan error)
-	defer close(errChan) // in case we do not reach the end of the fx
-	scannedA := new(atomic.Uint64)
-	scannedB := new(atomic.Uint64)
+	scannedA := new(atomic.Int64)
+	scannedB := new(atomic.Int64)
+	termStatus := uilive.New()
+	termStatus.Start()
+	defer termStatus.Stop()
 	// error logger
 	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
-			fmt.Fprintf(os.Stderr, "%s\n", err)
+			fmt.Fprintf(termStatus.Bypass(), "%s\n", err)
 			errorsList = append(errorsList, err)
 		}
 		close(errorsDone)
@@ -50,7 +53,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	loggerDone := make(chan any)
 	go func() {
 		for loggerCtx.Err() == nil {
-			timer := time.NewTimer(time.Second)
+			timer := time.NewTimer(100 * time.Millisecond)
 			select {
 			case <-loggerCtx.Done():
 				if !timer.Stop() {
@@ -60,13 +63,14 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 			case <-timer.C:
 				// proceed
 			}
-			fmt.Printf("[indexing] %d regular files found on path A | %d regular files found on path B\n",
-				scannedA.Add(0), scannedB.Add(0))
+			fmt.Fprintf(termStatus, "Indexing: %d regular files found on '%s' & %d regular files found on '%s'\n",
+				scannedA.Add(0), pathA, scannedB.Add(0), pathB)
 		}
 		totalA := scannedA.Add(0)
 		totalB := scannedB.Add(0)
 		total := totalA + totalB
-		fmt.Printf("Indexing done: %d files found ! (%d on path A and %d on path B)\n", total, totalA, totalB)
+		fmt.Fprintf(termStatus, "Indexing done: %d total files found (%d on '%s' and %d on '%s')\n",
+			total, totalA, pathA, totalB, pathB)
 		nbAFiles = totalA
 		close(loggerDone)
 	}()
@@ -105,7 +109,6 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	// Stop utilities goroutines
 	loggerCtxCancel()
 	close(errChan)
-	<-loggerDone
 	// Return both trees root
 	if len(fakeAParent.Children) == 0 {
 		err = errors.New("path A failed to be analyzed")
@@ -117,14 +120,19 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		return
 	}
 	pathBTree = fakeBParent.Children[0]
-	// in case of errors
+	// Print errors if any
+	<-loggerDone
+	<-errorsDone
 	if len(errorsList) != 0 {
-		// TODO
+		fmt.Fprintf(termStatus.Bypass(), "%d error(s) encountered during indexing:", len(errorsList))
+		for _, err = range errorsList {
+			fmt.Fprintf(termStatus.Bypass(), "\t%s\n", err)
+		}
 	}
 	return
 }
 
-func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Uint64, errChan chan<- error) {
+func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Int64, errChan chan<- error) {
 	var err error
 	self := TreeStat{
 		FullPath: pathScan,
