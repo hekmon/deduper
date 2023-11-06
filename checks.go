@@ -15,40 +15,48 @@ const (
 	testFileB = "deduper_fileB.test"
 )
 
-func validatePaths(pathA, pathB string) (err error) {
-	pathA = path.Clean(pathA)
-	pathB = path.Clean(pathB)
+func validatePaths(pathA, pathB string) (cleanPathA, cleanPathB string, err error) {
+	cleanPathA = path.Clean(pathA)
+	cleanPathB = path.Clean(pathB)
 	// Standalone tests
-	pathAStat, err := validatePath(pathA)
+	pathAStat, err := validatePath(cleanPathA)
 	if err != nil {
-		return fmt.Errorf("path A error: %w", err)
+		err = fmt.Errorf("path A error: %w", err)
+		return
 	}
-	pathBStat, err := validatePath(pathB)
+	pathBStat, err := validatePath(cleanPathB)
 	if err != nil {
-		return fmt.Errorf("path B error: %w", err)
+		err = fmt.Errorf("path B error: %w", err)
+		return
 	}
 	// Relative tests
 	//// They can not contains each others
-	if strings.HasPrefix(pathA, pathB) {
-		return fmt.Errorf("path A is contained within path B")
+	if strings.HasPrefix(cleanPathA, cleanPathB) {
+		err = fmt.Errorf("path A is contained within path B")
+		return
 	}
-	if strings.HasPrefix(pathB, pathA) {
-		return fmt.Errorf("path B is contained within path A")
+	if strings.HasPrefix(cleanPathB, cleanPathA) {
+		err = fmt.Errorf("path B is contained within path A")
+		return
 	}
 	//// They need to have the same backing filesystem for hardlinks
 	pathADevID, err := getDeviceID(pathAStat)
 	if err != nil {
-		return fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		return
 	}
 	pathBDevID, err := getDeviceID(pathBStat)
 	if err != nil {
-		return fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		return
 	}
 	if pathADevID != pathBDevID {
-		return errors.New("path A does not seems to be on the same filesystem than path B")
+		err = errors.New("path A does not seems to be on the same filesystem than path B")
+		return
 	}
 	// Final check, let's try to make a hardlink
-	return hardlinkTest(pathA, pathB)
+	err = hardlinkTest(cleanPathA, cleanPathB)
+	return
 }
 
 func validatePath(pathCandidate string) (pathStat fs.FileInfo, err error) {
