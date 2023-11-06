@@ -15,6 +15,7 @@ const (
 	testFileB = "deduper_fileB.test"
 )
 
+// TODO: reactivate tests
 func validatePaths(pathA, pathB string) (cleanPathA, cleanPathB string, err error) {
 	cleanPathA = path.Clean(pathA)
 	cleanPathB = path.Clean(pathB)
