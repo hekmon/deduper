@@ -7,38 +7,40 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/gosuri/uiprogress"
 	"github.com/hekmon/cunits/v2"
 	"golang.org/x/sync/semaphore"
 )
 
-const (
-	readSize = 64 * 1024 * 1024
-)
-
 func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles int64) (errorsList []error) {
 	// Prepare to launch goroutines
 	var workers sync.WaitGroup
-	errChan := make(chan error)
+	// Progress
+	progress := uiprogress.New()
+	progress.RefreshInterval = time.Second
+	progress.Width = 30
+	globalProgress := progress.AddBar(int(totalFiles)).AppendCompleted()
+	globalProgress.Empty = ' '
+	globalProgress.AppendFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalFiles)
+	})
+	progress.Start()
+	defer progress.Stop()
 	// error logger
+	errChan := make(chan error)
 	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
-			fmt.Fprintf(os.Stderr, "%s\n", err)
+			fmt.Fprintf(progress.Bypass(), "ERROR: %s\n", err)
 			errorsList = append(errorsList, err)
 		}
 		close(errorsDone)
 	}()
-	// Progress
-	progress := uiprogress.New()
-	globalProgress := progress.AddBar(int(totalFiles)).AppendCompleted().PrependElapsed()
-	globalProgress.AppendFunc(func(b *uiprogress.Bar) string {
-		return fmt.Sprintf("Files scanned: %d/%d", b.Current(), totalFiles)
-	})
-	progress.Start()
-	defer progress.Stop()
 	// start dedup search
 	for _, child := range pathATree.Children {
 		// can we launch it concurrently ?
@@ -53,9 +55,10 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 			dedupFile(child, pathBTree, tokenPool, &workers, progress, globalProgress.Incr, errChan)
 		}
 	}
-	// wait for all workers to finish
+	// wait for all dedup workers to finish
 	workers.Wait()
 	// Stop utilities goroutines
+	close(errChan)
 	<-errorsDone // wait for all errors to be compiled before return
 	return
 }
@@ -79,7 +82,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		}
 		return
 	}
-	// else regular file
+	// else process regular file
 	defer processed()
 	// do not process empty files
 	if refFile.Infos.Size() == 0 {
@@ -95,21 +98,25 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 	if len(candidates) == 0 {
 		return
 	}
-	// candidates ready, create the progress bar
+	// candidates ready
+	fullPaths := make([]string, len(candidates))
+	for index, candidate := range candidates {
+		fullPaths[index] = candidate.FullPath
+	}
+	fmt.Fprintf(progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n", refFile.FullPath, len(candidates), strings.Join(fullPaths, "', '"))
+	// create the progress bar for this file
 	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(candidates)+1)))
-	fileBar := progress.AddBar(int(totalSize)).AppendCompleted().PrependElapsed()
+	fileBar := progress.AddBar(int(totalSize.Byte())).AppendCompleted()
+	fileBar.Empty = ' '
 	fileBar.AppendFunc(func(b *uiprogress.Bar) string {
-		return fmt.Sprintf("%s and %d candidate(s) (total to hash: %s)", refFile.Infos.Name(), len(candidates), totalSize)
+		return fmt.Sprintf("%s + %d candidate(s) (hashing: %s/%s)",
+			refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 	})
-	var (
-		totalWritten       int
-		fileProgressAccess sync.Mutex
-	)
+	var totalWritten atomic.Int64
 	updateProgress := func(add int) {
-		fileProgressAccess.Lock()
-		totalWritten += add
-		_ = fileBar.Set(totalWritten)
-		fileProgressAccess.Unlock()
+		if err := fileBar.Set(int(totalWritten.Add(int64(add)))); err != nil {
+			fmt.Fprintf(progress.Bypass(), "ERROR: failed to set progress bar for '%s': %s", refFile.Infos.Name(), err)
+		}
 	}
 	// compute checksum of the ref file
 	var (
@@ -126,6 +133,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 				errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 				return
 			}
+			fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", refFile.FullPath, originalHash)
 			tokenPool.Release(1)
 			localWaitGroup.Done()
 			waitGroup.Done()
@@ -136,11 +144,12 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
+		fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", refFile.FullPath, originalHash)
 	}
 	// compute checksums of the candidates and replace them if a match is found
 	candidatesHashes := make([][]byte, len(candidates))
 	for candidateIndex, candidate := range candidates {
-		// Compute checksum
+		// can we launch it concurrently ?
 		if tokenPool.TryAcquire(1) {
 			waitGroup.Add(1)
 			localWaitGroup.Add(1)
@@ -149,6 +158,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 					errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
 					return
 				}
+				fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %X\n", localCandidate.FullPath, *target)
 				tokenPool.Release(1)
 				localWaitGroup.Done()
 				waitGroup.Done()
@@ -159,6 +169,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 				errChan <- fmt.Errorf("failed to compute hash of ref file %s: %w", candidate.FullPath, err)
 				return
 			}
+			fmt.Fprintf(progress.Bypass(), "Hash computed for '%s': %x\n", candidate.FullPath, candidatesHashes[candidateIndex])
 		}
 	}
 	localWaitGroup.Wait()
@@ -191,30 +202,32 @@ func findFileWithSize(refSize int64, node *TreeStat) (candidates []*TreeStat) {
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
 	// Prepare
 	hasher := sha256.New()
-	buffer := make([]byte, readSize)
+	progressWriter := writterProgress{
+		writter: hasher,
+		report:  reportWritten,
+	}
 	fd, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer fd.Close()
-	// Feed the hasher and report progress
-	var read, written int
-	continueReading := true
-	for continueReading {
-		if read, err = fd.Read(buffer); err != nil {
-			if !errors.Is(err, io.EOF) {
-				err = fmt.Errorf("failed to read from '%s': %w", path, err)
-				return
-			}
-			continueReading = false
-			err = nil
-		}
-		if written, err = hasher.Write(buffer[:read]); err != nil {
-			err = fmt.Errorf("failed to write to hasher from file '%s': %w", path, err)
-			return
-		}
-		go reportWritten(written)
+	// Feed the hasher
+	if _, err = io.Copy(progressWriter, fd); err != nil {
+		return
 	}
 	hash = hasher.Sum(nil)
+	return
+}
+
+type writterProgress struct {
+	writter io.Writer
+	report  func(add int)
+}
+
+func (wp writterProgress) Write(p []byte) (n int, err error) {
+	n, err = wp.writter.Write(p)
+	if err == nil || errors.Is(err, io.EOF) {
+		wp.report(n)
+	}
 	return
 }
