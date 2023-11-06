@@ -14,21 +14,24 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles uint64) {
+func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles uint64) (errorsList []error) {
 	// Prepare to launch goroutines
 	var workers sync.WaitGroup
 	errChan := make(chan error)
-	defer close(errChan)
 	processed := new(atomic.Uint64)
 	hashInProgress := new(atomic.Int64)
 	// error logger
+	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
 			fmt.Fprintf(os.Stderr, "%s\n", err)
+			errorsList = append(errorsList, err)
 		}
+		close(errorsDone)
 	}()
 	// stats logger
 	loggerCtx, loggerCtxCancel := context.WithCancel(context.Background())
+	defer loggerCtxCancel() // in case we do not reach the end of the fx
 	loggerDone := make(chan any)
 	go func() {
 		for loggerCtx.Err() == nil {
@@ -51,7 +54,6 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 			float64(localProcessed)/float64(totalFiles)*100, localProcessed)
 		close(loggerDone)
 	}()
-	defer loggerCtxCancel() // in case we do not reach the end of the fx
 	// start dedup search
 	for _, child := range pathATree.Children {
 		// can we launch it concurrently ?
@@ -71,6 +73,8 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 	// Stop utilities goroutines
 	loggerCtxCancel()
 	<-loggerDone // wait for final stats
+	<-errorsDone // wait for all errors to be compiled before return
+	return
 }
 
 func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, processed *atomic.Uint64, hashInProgress *atomic.Int64, errChan chan<- error) {
@@ -128,6 +132,9 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 	// compute checksums of the candidates and replace them if a match is found
 	candidatesHashes := make([][]byte, len(candidates))
 	for candidateIndex, candidate := range candidates {
+		// Check if not already a hard link
+		//// TODO
+		// Compute checksum
 		if tokenPool.TryAcquire(1) {
 			waitGroup.Add(1)
 			localWaitGroup.Add(1)

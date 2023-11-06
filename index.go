@@ -27,18 +27,26 @@ type TreeStat struct {
 
 func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles uint64, err error) {
 	// Prepare to launch goroutines
-	var workers sync.WaitGroup
+	var (
+		workers    sync.WaitGroup
+		errorsList []error
+	)
 	errChan := make(chan error)
+	defer close(errChan) // in case we do not reach the end of the fx
 	scannedA := new(atomic.Uint64)
 	scannedB := new(atomic.Uint64)
 	// error logger
+	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
 			fmt.Fprintf(os.Stderr, "%s\n", err)
+			errorsList = append(errorsList, err)
 		}
+		close(errorsDone)
 	}()
 	// stats logger
 	loggerCtx, loggerCtxCancel := context.WithCancel(context.Background())
+	defer loggerCtxCancel() // in case we do not reach the end of the fx
 	loggerDone := make(chan any)
 	go func() {
 		for loggerCtx.Err() == nil {
@@ -62,7 +70,6 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		nbAFiles = totalA
 		close(loggerDone)
 	}()
-	defer loggerCtxCancel() // in case we do not reach the end of the fx
 	// Launch the path A walker
 	fakeAParent := TreeStat{
 		Children:       make([]*TreeStat, 0, 1),
@@ -110,6 +117,10 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		return
 	}
 	pathBTree = fakeBParent.Children[0]
+	// in case of errors
+	if len(errorsList) != 0 {
+		// TODO
+	}
 	return
 }
 

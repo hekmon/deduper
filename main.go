@@ -39,5 +39,5 @@ func main() {
 	}
 
 	// Start dedup
-	dedup(pathATree, pathBTree, tokenPool, nbAFiles)
+	errors := dedup(pathATree, pathBTree, tokenPool, nbAFiles)
 }
