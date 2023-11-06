@@ -20,6 +20,7 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 	errChan := make(chan error)
 	defer close(errChan)
 	processed := new(atomic.Uint64)
+	hashInProgress := new(atomic.Int64)
 	// error logger
 	go func() {
 		for err := range errChan {
@@ -31,7 +32,7 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 	loggerDone := make(chan any)
 	go func() {
 		for loggerCtx.Err() == nil {
-			timer := time.NewTimer(time.Second)
+			timer := time.NewTimer(5 * time.Second)
 			select {
 			case <-loggerCtx.Done():
 				if !timer.Stop() {
@@ -42,12 +43,12 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 				// proceed
 			}
 			localProcessed := processed.Add(0)
-			fmt.Printf("[%0.2f%%] %d/%d files processed so far\n",
-				float64(localProcessed)/float64(totalFiles)*100, localProcessed, totalFiles)
+			fmt.Printf("[%0.2f%%] %d/%d files processed so far (%d hashing in progress)\n",
+				float64(localProcessed)/float64(totalFiles)*100, localProcessed, totalFiles, hashInProgress.Add(0))
 		}
 		localProcessed := processed.Add(0)
-		fmt.Printf("[%0.2f%%] %d/%d files processed so far\n",
-			float64(localProcessed)/float64(totalFiles)*100, localProcessed, totalFiles)
+		fmt.Printf("[%0.2f%%] %d files processed\n",
+			float64(localProcessed)/float64(totalFiles)*100, localProcessed)
 		close(loggerDone)
 	}()
 	defer loggerCtxCancel() // in case we do not reach the end of the fx
@@ -57,12 +58,12 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 		if tokenPool.TryAcquire(1) {
 			workers.Add(1)
 			go func(localChild *TreeStat) {
-				dedupFile(localChild, pathBTree, tokenPool, &workers, processed, errChan)
+				dedupFile(localChild, pathBTree, tokenPool, &workers, processed, hashInProgress, errChan)
 				tokenPool.Release(1)
 				workers.Done()
 			}(child)
 		} else {
-			dedupFile(child, pathBTree, tokenPool, &workers, processed, errChan)
+			dedupFile(child, pathBTree, tokenPool, &workers, processed, hashInProgress, errChan)
 		}
 	}
 	// wait for all workers to finish
@@ -72,7 +73,7 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 	<-loggerDone // wait for final stats
 }
 
-func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, processed *atomic.Uint64, errChan chan<- error) {
+func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, processed *atomic.Uint64, hashInProgress *atomic.Int64, errChan chan<- error) {
 	if refFile.Infos.Mode().IsDir() {
 		// continue to children
 		for _, child := range refFile.Children {
@@ -80,13 +81,13 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			if tokenPool.TryAcquire(1) {
 				waitGroup.Add(1)
 				go func(localChild *TreeStat) {
-					dedupFile(localChild, pathBTree, tokenPool, waitGroup, processed, errChan)
+					dedupFile(localChild, pathBTree, tokenPool, waitGroup, processed, hashInProgress, errChan)
 					tokenPool.Release(1)
 					waitGroup.Done()
 				}(child)
 			} else {
 				// process within the same goroutine
-				dedupFile(child, pathBTree, tokenPool, waitGroup, processed, errChan)
+				dedupFile(child, pathBTree, tokenPool, waitGroup, processed, hashInProgress, errChan)
 			}
 		}
 		return
@@ -109,7 +110,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		waitGroup.Add(1)
 		localWaitGroup.Add(1)
 		go func() {
-			if originalHash, err = computeHash(refFile.FullPath); err != nil {
+			if originalHash, err = computeHash(refFile.FullPath, hashInProgress); err != nil {
 				errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 				return
 			}
@@ -119,7 +120,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		}()
 	} else {
 		// process within the same goroutine
-		if originalHash, err = computeHash(refFile.FullPath); err != nil {
+		if originalHash, err = computeHash(refFile.FullPath, hashInProgress); err != nil {
 			errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
@@ -131,7 +132,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			waitGroup.Add(1)
 			localWaitGroup.Add(1)
 			go func(localCandidate *TreeStat, target *[]byte) {
-				if *target, err = computeHash(localCandidate.FullPath); err != nil {
+				if *target, err = computeHash(localCandidate.FullPath, hashInProgress); err != nil {
 					errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
 					return
 				}
@@ -141,7 +142,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 			}(candidate, &(candidatesHashes[candidateIndex]))
 		} else {
 			// process within the same goroutine
-			if candidatesHashes[candidateIndex], err = computeHash(candidate.FullPath); err != nil {
+			if candidatesHashes[candidateIndex], err = computeHash(candidate.FullPath, hashInProgress); err != nil {
 				errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", candidate.FullPath, err)
 				return
 			}
@@ -174,14 +175,16 @@ func findFileWithSize(refSize int64, node *TreeStat) (candidates []*TreeStat) {
 	return
 }
 
-func computeHash(path string) (hash []byte, err error) {
-	fmt.Printf("Computing hash of %s\n...", path)
+func computeHash(path string, hashInProgress *atomic.Int64) (hash []byte, err error) {
+	fmt.Printf("Computing hash of %s...\n", path)
 	hasher := sha256.New()
 	fd, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer fd.Close()
+	hashInProgress.Add(1)
+	defer hashInProgress.Add(-1)
 	if _, err = io.Copy(hasher, fd); err != nil {
 		return
 	}
