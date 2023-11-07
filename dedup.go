@@ -213,12 +213,20 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 		if noDryRun {
 			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
 				refFile.FullPath, candidates[candidateIndex].FullPath)
-			/// TODO
+			if err = os.Remove(candidates[candidateIndex].FullPath); err != nil {
+				concurrent.errChan <- fmt.Errorf("can not make hardlink against '%s': failed to remove '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
+				continue
+			}
+			if err = os.Link(refFile.FullPath, candidates[candidateIndex].FullPath); err != nil {
+				concurrent.errChan <- fmt.Errorf("can not make hardlink between '%s' <> '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
+				continue
+			}
+			deduped = append(deduped, candidates[candidateIndex])
 		} else {
 			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
 				refFile.FullPath, candidates[candidateIndex].FullPath)
+			deduped = append(deduped, candidates[candidateIndex])
 		}
-		deduped = append(deduped, candidates[candidateIndex])
 	}
 	// Done, show end message
 	if noDryRun {

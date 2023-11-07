@@ -15,17 +15,16 @@ const (
 	testFileB = "deduper_fileB.test"
 )
 
-// TODO: reactivate tests
 func validatePaths(pathA, pathB string) (cleanPathA, cleanPathB string, err error) {
 	cleanPathA = path.Clean(pathA)
 	cleanPathB = path.Clean(pathB)
 	// Standalone tests
-	_, err = validatePath(cleanPathA)
+	pathAStat, err := validatePath(cleanPathA)
 	if err != nil {
 		err = fmt.Errorf("path A error: %w", err)
 		return
 	}
-	_, err = validatePath(cleanPathB)
+	pathBStat, err := validatePath(cleanPathB)
 	if err != nil {
 		err = fmt.Errorf("path B error: %w", err)
 		return
@@ -40,23 +39,23 @@ func validatePaths(pathA, pathB string) (cleanPathA, cleanPathB string, err erro
 		err = fmt.Errorf("path B is contained within path A")
 		return
 	}
-	// //// They need to have the same backing filesystem for hardlinks
-	// pathADevID, err := getDeviceID(pathAStat)
-	// if err != nil {
-	// 	err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
-	// 	return
-	// }
-	// pathBDevID, err := getDeviceID(pathBStat)
-	// if err != nil {
-	// 	err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
-	// 	return
-	// }
-	// if pathADevID != pathBDevID {
-	// 	err = errors.New("path A does not seems to be on the same filesystem than path B")
-	// 	return
-	// }
-	// // Final check, let's try to make a hardlink
-	// err = hardlinkTest(cleanPathA, cleanPathB)
+	//// They need to have the same backing filesystem for hardlinks
+	pathADevID, err := getDeviceID(pathAStat)
+	if err != nil {
+		err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		return
+	}
+	pathBDevID, err := getDeviceID(pathBStat)
+	if err != nil {
+		err = fmt.Errorf("can not retreive filesystem ID of path A: %w", err)
+		return
+	}
+	if pathADevID != pathBDevID {
+		err = errors.New("path A does not seems to be on the same filesystem than path B")
+		return
+	}
+	// Final check, let's try to make a hardlink
+	err = hardlinkTest(cleanPathA, cleanPathB)
 	return
 }
 
