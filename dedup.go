@@ -103,12 +103,13 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 				concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
 				continue
 			}
-			// check if inode is same
+			// check if inode is the same
 			if candidateSystem.Ino != refFileSystem.Ino {
-				// different inodes, no hardlink between them
 				finalCandidates = append(finalCandidates, candidate)
+			} else {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
+					candidate.FullPath, refFile.FullPath)
 			}
-			// TODO: test
 		}
 	} else {
 		finalCandidates = sizeCandidates
