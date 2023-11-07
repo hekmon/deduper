@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles int64) (errorsList []error) {
+func process(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles int64) (errorsList []error) {
 	// Prepare to launch goroutines
 	var workers sync.WaitGroup
 	// Progress
@@ -42,20 +43,8 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 		}
 		close(errorsDone)
 	}()
-	// start dedup search
-	for _, child := range pathATree.Children {
-		// can we launch it concurrently ?
-		if tokenPool.TryAcquire(1) {
-			workers.Add(1)
-			go func(localChild *TreeStat) {
-				dedupFile(localChild, pathBTree, tokenPool, &workers, progress, globalProgress.Incr, errChan)
-				tokenPool.Release(1)
-				workers.Done()
-			}(child)
-		} else {
-			dedupFile(child, pathBTree, tokenPool, &workers, progress, globalProgress.Incr, errChan)
-		}
-	}
+	// start node processing from the top of the tree
+	processNode(pathATree, pathBTree, concurrentToolBox{tokenPool, &workers, progress, globalProgress.Incr, errChan})
 	// wait for all dedup workers to finish
 	workers.Wait()
 	// Stop utilities goroutines
@@ -64,27 +53,32 @@ func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalF
 	return
 }
 
-func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, progress *uiprogress.Progress, processed func() bool, errChan chan<- error) {
+type concurrentToolBox struct {
+	tokenPool          *semaphore.Weighted
+	waitGroup          *sync.WaitGroup
+	progress           *uiprogress.Progress
+	processedReporting func() bool
+	errChan            chan<- error
+}
+
+func processNode(refFile, pathBTree *TreeStat, concurrent concurrentToolBox) {
 	if refFile.Infos.Mode().IsDir() {
-		// continue to children
 		for _, child := range refFile.Children {
-			// can we launch it concurrently ?
-			if tokenPool.TryAcquire(1) {
-				waitGroup.Add(1)
-				go func(localChild *TreeStat) {
-					dedupFile(localChild, pathBTree, tokenPool, waitGroup, progress, processed, errChan)
-					tokenPool.Release(1)
-					waitGroup.Done()
-				}(child)
-			} else {
-				// process within the same goroutine
-				dedupFile(child, pathBTree, tokenPool, waitGroup, progress, processed, errChan)
-			}
+			processNode(child, pathBTree, concurrent)
 		}
-		return
+	} else {
+		processFileFindCandidates(refFile, pathBTree, concurrent)
 	}
-	// else process regular file
-	defer processed()
+}
+
+func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurrentToolBox) {
+	// If we do not make it to candidates evaluation, report the file as processed
+	processed := true
+	defer func() {
+		if processed {
+			concurrent.processedReporting()
+		}
+	}()
 	// do not process empty files
 	if refFile.Infos.Size() == 0 {
 		return
@@ -97,7 +91,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 	// Remove candidates that are already hardlink to reffile
 	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
 	if !ok {
-		errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
+		concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
 		return
 	}
 	var finalCandidates []*TreeStat
@@ -107,7 +101,7 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 		for _, candidate := range candidates {
 			candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
 			if !ok {
-				errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
+				concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
 				continue
 			}
 			// check if inode is same
@@ -128,83 +122,79 @@ func dedupFile(refFile, pathBTree *TreeStat, tokenPool *semaphore.Weighted, wait
 	for index, candidate := range finalCandidates {
 		fullPaths[index] = candidate.FullPath
 	}
-	fmt.Fprintf(progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n", refFile.FullPath, len(finalCandidates), strings.Join(fullPaths, "', '"))
+	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n",
+		refFile.FullPath, len(finalCandidates), strings.Join(fullPaths, "', '"))
+	// Start a goroutine as handler for this file (no token as this goroutine will not produce IO itself but will launch others goroutines that will)
+	concurrent.waitGroup.Add(1)
+	go func() {
+		processFileEvaluateCandidates(refFile, finalCandidates, concurrent)
+		concurrent.waitGroup.Done()
+	}()
+	// do not report this file as processed (yet) when exiting this fx as candidates must be evaluated
+	processed = false
+}
+
+func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, concurrent concurrentToolBox) {
+	defer concurrent.processedReporting()
 	// create the progress bar for this file
-	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(finalCandidates)+1)))
-	fileBar := progress.AddBar(int(totalSize.Byte())).AppendCompleted()
+	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(candidates)+1)))
+	fileBar := concurrent.progress.AddBar(int(totalSize.Byte())).AppendCompleted()
 	fileBar.Empty = ' '
 	fileBar.AppendFunc(func(b *uiprogress.Bar) string {
 		return fmt.Sprintf("%s + %d candidate(s) (hashing: %s/%s)",
-			refFile.Infos.Name(), len(finalCandidates), cunits.ImportInByte(float64(b.Current())), totalSize)
+			refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 	})
 	var totalWritten atomic.Int64
 	updateProgress := func(add int) {
 		if err := fileBar.Set(int(totalWritten.Add(int64(add)))); err != nil {
-			fmt.Fprintf(progress.Bypass(), "ERROR: failed to set progress bar for '%s': %s", refFile.Infos.Name(), err)
+			fmt.Fprintf(concurrent.progress.Bypass(), "ERROR: failed to set progress bar for '%s': %s", refFile.Infos.Name(), err)
 		}
 	}
-	// compute checksum of the ref file
+	// prepare to compute checksums
 	var (
 		originalHash   []byte
 		localWaitGroup sync.WaitGroup
 		err            error
 	)
-	//// can we launch it concurrently ?
-	if tokenPool.TryAcquire(1) {
-		waitGroup.Add(1)
-		localWaitGroup.Add(1)
-		go func() {
-			if originalHash, err = computeHash(refFile.FullPath, updateProgress); err != nil {
-				errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
-				return
-			}
-			fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
-			tokenPool.Release(1)
-			localWaitGroup.Done()
-			waitGroup.Done()
-		}()
-	} else {
-		// process within the same goroutine
+	candidatesHashes := make([][]byte, len(candidates))
+	// launch reffile hash in a weighted goroutine
+	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
+	concurrent.waitGroup.Add(1)
+	localWaitGroup.Add(1)
+	go func() {
+		defer concurrent.tokenPool.Release(1)
+		defer localWaitGroup.Done()
+		defer concurrent.waitGroup.Done()
 		if originalHash, err = computeHash(refFile.FullPath, updateProgress); err != nil {
-			errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
+			concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
-		fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
-	}
-	// compute checksums of the candidates and replace them if a match is found
-	candidatesHashes := make([][]byte, len(finalCandidates))
-	for candidateIndex, candidate := range finalCandidates {
-		// can we launch it concurrently ?
-		if tokenPool.TryAcquire(1) {
-			waitGroup.Add(1)
-			localWaitGroup.Add(1)
-			go func(localCandidate *TreeStat, target *[]byte) {
-				if *target, err = computeHash(localCandidate.FullPath, updateProgress); err != nil {
-					errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
-					return
-				}
-				fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
-				tokenPool.Release(1)
-				localWaitGroup.Done()
-				waitGroup.Done()
-			}(candidate, &(candidatesHashes[candidateIndex]))
-		} else {
-			// process within the same goroutine
-			if candidatesHashes[candidateIndex], err = computeHash(candidate.FullPath, updateProgress); err != nil {
-				errChan <- fmt.Errorf("failed to compute hash of ref file %s: %w", candidate.FullPath, err)
+		fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
+	}()
+	// compute checksums of the candidates
+	for candidateIndex, candidate := range candidates {
+		_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
+		concurrent.waitGroup.Add(1)
+		localWaitGroup.Add(1)
+		go func(localCandidate *TreeStat, target *[]byte) {
+			defer concurrent.tokenPool.Release(1)
+			defer localWaitGroup.Done()
+			defer concurrent.waitGroup.Done()
+			if *target, err = computeHash(localCandidate.FullPath, updateProgress); err != nil {
+				concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
 				return
 			}
-			fmt.Fprintf(progress.Bypass(), "SHA256 computed for '%s': %x\n", candidate.FullPath, candidatesHashes[candidateIndex])
-		}
+			fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
+		}(candidate, &(candidatesHashes[candidateIndex]))
 	}
 	localWaitGroup.Wait()
-	// time to compare
+	// time to compare all of them
 	for candidateIndex, candidateHash := range candidatesHashes {
 		if !bytes.Equal(originalHash, candidateHash) {
 			continue
 		}
 		// Same file found !
-		fmt.Fprintf(progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
+		fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
 			refFile.FullPath, candidates[candidateIndex].FullPath)
 		/// TODO
 	}
