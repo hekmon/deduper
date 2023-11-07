@@ -97,7 +97,7 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 	} else {
 		fmt.Printf("%d file(s) could be deduped with hard links to save a total of %s\n", totalFiles, totalSaved)
 	}
-	// wait for all errors to be compiled before returning
+	// wait for all errors to be accounted for before returning
 	<-errorsDone
 	return
 }
