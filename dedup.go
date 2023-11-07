@@ -19,7 +19,12 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semaphore.Weighted) (errorsList []error) {
+type dedupedReport struct {
+	Reference *TreeStat
+	Files     []*TreeStat
+}
+
+func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semaphore.Weighted) (errorCount int) {
 	// Setup global progress bar
 	progress := uiprogress.New()
 	progress.RefreshInterval = time.Second
@@ -30,25 +35,57 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 		return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalAFiles)
 	})
 	progress.Start()
-	defer progress.Stop()
 	// error logger
 	errChan := make(chan error)
 	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
 			fmt.Fprintf(progress.Bypass(), "ERROR: %s\n", err)
-			errorsList = append(errorsList, err)
+			errorCount++
 		}
 		close(errorsDone)
 	}()
+	// report logger
+	dedupedChan := make(chan dedupedReport)
+	dedupedDone := make(chan any)
+	dedupedList := make(map[*TreeStat][]*TreeStat)
+	go func() {
+		for deduped := range dedupedChan {
+			dedupedList[deduped.Reference] = deduped.Files
+		}
+		close(dedupedDone)
+	}()
 	// start nodes processing from the top of the tree
 	var workers sync.WaitGroup
-	processNode(pathATree, pathBTree, concurrentToolBox{tokenPool, &workers, progress, globalProgress.Incr, errChan})
-	// wait for all dedup workers to finish
+	processNode(pathATree, pathBTree, concurrentToolBox{tokenPool, &workers, progress, globalProgress.Incr, dedupedChan, errChan})
 	workers.Wait()
+	progress.Stop()
 	// Stop utilities goroutines
+	close(dedupedChan)
 	close(errChan)
-	<-errorsDone // wait for all errors to be compiled before return
+	// Print results log
+	<-dedupedDone
+	var (
+		totalSaved cunits.Bits
+		totalFiles int
+	)
+	fmt.Println()
+	fmt.Println("Dedup listing:")
+	for refFile, matchsDeduped := range dedupedList {
+		fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
+		saved := fileSize * cunits.Bits(len(matchsDeduped))
+		fmt.Printf("File '%s' (%s) has %d match(s) (saved %s):\n",
+			refFile.FullPath, fileSize, len(matchsDeduped), saved)
+		for _, matchDeduped := range matchsDeduped {
+			fmt.Printf("\tMatch '%s' has been replaced by a hardlink\n", matchDeduped.FullPath)
+		}
+		totalSaved += saved
+		totalFiles += len(matchsDeduped)
+	}
+	fmt.Println()
+	fmt.Printf("%d file(s) deduped with hard linking saving a total of %s\n", totalFiles, totalSaved)
+	// wait for all errors to be compiled before returning
+	<-errorsDone
 	return
 }
 
@@ -57,6 +94,7 @@ type concurrentToolBox struct {
 	waitGroup          *sync.WaitGroup
 	progress           *uiprogress.Progress
 	processedReporting func() bool
+	dedupedChan        chan<- dedupedReport
 	errChan            chan<- error
 }
 
@@ -187,7 +225,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 		}
 		fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 	}()
-	// compute checksums of the candidates
+	// compute checksums of the candidates in weighted goroutines too
 	for candidateIndex, candidate := range candidates {
 		_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 		fileProcessingWaitGroup.Add(1)
@@ -233,10 +271,15 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 		endStatus = fmt.Sprintf("%s: %d/%d candidates hardlinked (saved %s)",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	} else {
-		endStatus = fmt.Sprintf("%s: %d/%d candidates could be hardlinked (potential saving %s)",
+		endStatus = fmt.Sprintf("%s: %d/%d candidates could be hardlinked (potential saving of %s)",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	}
 	fileBar.Incr() // add the last fake byte to trigger one last update of the append msg
+	// send report
+	concurrent.dedupedChan <- dedupedReport{
+		Reference: refFile,
+		Files:     deduped,
+	}
 }
 
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {

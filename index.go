@@ -25,11 +25,10 @@ type TreeStat struct {
 	ChildrenAccess *sync.Mutex
 }
 
-func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64) {
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64, errorCount int) {
 	// Prepare to launch goroutines
 	var (
-		workers    sync.WaitGroup
-		errorsList []error
+		workers sync.WaitGroup
 	)
 	errChan := make(chan error)
 	scannedA := new(atomic.Int64)
@@ -42,7 +41,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	go func() {
 		for err := range errChan {
 			fmt.Fprintf(termStatus.Bypass(), "%s\n", err)
-			errorsList = append(errorsList, err)
+			errorCount++
 		}
 		close(errorsDone)
 	}()
@@ -108,12 +107,6 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	// Print errors if any
 	<-loggerDone
 	<-errorsDone
-	if len(errorsList) != 0 {
-		fmt.Fprintf(termStatus.Bypass(), "%d error(s) encountered during indexing:", len(errorsList))
-		for _, err := range errorsList {
-			fmt.Fprintf(termStatus.Bypass(), "\t%s\n", err)
-		}
-	}
 	return
 }
 

@@ -38,13 +38,19 @@ func main() {
 
 	// Start Processing
 	start := time.Now()
-	if !noDryRun {
+	if noDryRun {
+		fmt.Println("/!\\ WARNING: running in apply mode: files will be replaced by hardlinks if they match!")
+	} else {
 		fmt.Println("Running in dry run mode. Use -apply to actually dedup files.")
-		fmt.Println()
 	}
-	pathATree, pathBTree, nbAFiles := index(cleanPathA, cleanPathB, tokenPool)
 	fmt.Println()
-	dedup(pathATree, pathBTree, nbAFiles, tokenPool)
+	pathATree, pathBTree, nbAFiles, errorCount := index(cleanPathA, cleanPathB, tokenPool)
+	if errorCount > 0 {
+		fmt.Printf("%d error(s) encountered during indexing, please check the logs", errorCount)
+	}
 	fmt.Println()
+	if errorCount = dedup(pathATree, pathBTree, nbAFiles, tokenPool); errorCount > 1 {
+		fmt.Printf("%d error(s) encountered during processing, please check the logs", errorCount)
+	}
 	fmt.Printf("Done in %v (max workers: %d)\n", (time.Since(start)/time.Second)*time.Second, semaphoreSize)
 }
