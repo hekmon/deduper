@@ -150,10 +150,14 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 	// Mark the file as processed when done
 	defer concurrent.processedReporting()
 	// create the progress bar for this particular file
-	totalSize := cunits.ImportInByte(float64(refFile.Infos.Size() * int64(len(candidates)+1)))
+	endStatus := ""
+	totalSize := cunits.ImportInByte((float64(refFile.Infos.Size() * int64(len(candidates)+1))) + 1) // add one last fake byte to trigger print of end message
 	fileBar := concurrent.progress.AddBar(int(totalSize.Byte())).AppendCompleted()
 	fileBar.Empty = ' '
 	fileBar.AppendFunc(func(b *uiprogress.Bar) string {
+		if endStatus != "" {
+			return endStatus
+		}
 		return fmt.Sprintf("%s + %d candidate(s) (total hashing: %s/%s)",
 			refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 	})
@@ -199,30 +203,47 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 	// wait for hashing goroutines to finish
 	fileProcessingWaitGroup.Wait()
 	// time to compare all of them
+	deduped := make([]*TreeStat, 0, len(candidates))
 	for candidateIndex, candidateHash := range candidatesHashes {
 		if !bytes.Equal(originalHash, candidateHash) {
 			continue
 		}
 		// Same file found !
-		fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
-			refFile.FullPath, candidates[candidateIndex].FullPath)
-		/// TODO
+		if noDryRun {
+			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
+				refFile.FullPath, candidates[candidateIndex].FullPath)
+			/// TODO
+		} else {
+			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
+				refFile.FullPath, candidates[candidateIndex].FullPath)
+		}
+		deduped = append(deduped, candidates[candidateIndex])
 	}
+	// Done, show end message
+	if noDryRun {
+		endStatus = fmt.Sprintf("%s: %d/%d candidates hardlinked (saved %s)",
+			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
+	} else {
+		endStatus = fmt.Sprintf("%s: %d/%d candidates could be hardlinked (potential saving %s)",
+			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
+	}
+	fileBar.Incr() // add the last fake byte to trigger one last update of the append msg
 }
 
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
-	// Prepare
+	// Prepare the hasher
 	hasher := sha256.New()
 	progressWritter := writterProgress{
 		writter: hasher,
 		report:  reportWritten,
 	}
+	// Open file for reading
 	fd, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer fd.Close()
-	// Feed the hasher
+	// Feed it to the hasher
 	if _, err = io.Copy(progressWritter, fd); err != nil {
 		return
 	}
