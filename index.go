@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -26,7 +25,7 @@ type TreeStat struct {
 	ChildrenAccess *sync.Mutex
 }
 
-func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64, err error) {
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64) {
 	// Prepare to launch goroutines
 	var (
 		workers    sync.WaitGroup
@@ -79,10 +78,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		Children:       make([]*TreeStat, 0, 1),
 		ChildrenAccess: new(sync.Mutex),
 	}
-	if err = tokenPool.Acquire(context.Background(), 1); err != nil {
-		err = fmt.Errorf("failed to acquire token for prescan (should not happen): %s", err)
-		return
-	}
+	_ = tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	workers.Add(1)
 	go func() {
 		indexChild(pathA, &fakeAParent, tokenPool, &workers, scannedA, errChan)
@@ -94,10 +90,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		Children:       make([]*TreeStat, 0, 1),
 		ChildrenAccess: new(sync.Mutex),
 	}
-	if err = tokenPool.Acquire(context.Background(), 1); err != nil {
-		err = fmt.Errorf("failed to acquire token for prescan (should not happen): %s", err)
-		return
-	}
+	_ = tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	workers.Add(1)
 	go func() {
 		indexChild(pathB, &fakeBParent, tokenPool, &workers, scannedB, errChan)
@@ -110,22 +103,14 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	loggerCtxCancel()
 	close(errChan)
 	// Return both trees root
-	if len(fakeAParent.Children) == 0 {
-		err = errors.New("path A failed to be analyzed")
-		return
-	}
 	pathATree = fakeAParent.Children[0]
-	if len(fakeBParent.Children) == 0 {
-		err = errors.New("path B failed to be analyzed")
-		return
-	}
 	pathBTree = fakeBParent.Children[0]
 	// Print errors if any
 	<-loggerDone
 	<-errorsDone
 	if len(errorsList) != 0 {
 		fmt.Fprintf(termStatus.Bypass(), "%d error(s) encountered during indexing:", len(errorsList))
-		for _, err = range errorsList {
+		for _, err := range errorsList {
 			fmt.Fprintf(termStatus.Bypass(), "\t%s\n", err)
 		}
 	}

@@ -19,15 +19,15 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func dedup(pathATree, pathBTree *TreeStat, tokenPool *semaphore.Weighted, totalFiles int64) (errorsList []error) {
+func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semaphore.Weighted) (errorsList []error) {
 	// Setup global progress bar
 	progress := uiprogress.New()
 	progress.RefreshInterval = time.Second
 	progress.Width = 30
-	globalProgress := progress.AddBar(int(totalFiles)).AppendCompleted()
+	globalProgress := progress.AddBar(int(totalAFiles)).AppendCompleted()
 	globalProgress.Empty = ' '
 	globalProgress.AppendFunc(func(b *uiprogress.Bar) string {
-		return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalFiles)
+		return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalAFiles)
 	})
 	progress.Start()
 	defer progress.Stop()

@@ -31,14 +31,8 @@ func main() {
 	}
 	tokenPool := semaphore.NewWeighted(semaphoreSize)
 
-	// Start indexing
-	pathATree, pathBTree, nbAFiles, err := index(cleanPathA, cleanPathB, tokenPool)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to index directories: %s\n", err)
-		os.Exit(2)
-	}
+	// Start Processing
+	pathATree, pathBTree, nbAFiles := index(cleanPathA, cleanPathB, tokenPool)
 	fmt.Println()
-
-	// Start dedup
-	dedup(pathATree, pathBTree, tokenPool, nbAFiles)
+	dedup(pathATree, pathBTree, nbAFiles, tokenPool)
 }
