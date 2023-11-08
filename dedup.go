@@ -268,7 +268,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 				continue
 			}
 			if err = os.Link(refFile.FullPath, candidates[candidateIndex].FullPath); err != nil {
-				concurrent.errChan <- fmt.Errorf("can not make hardlink between '%s' <> '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
+				concurrent.errChan <- fmt.Errorf("can not make hardlink between '%s' <> '%s' (file already removed!): %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
 				continue
 			}
 			deduped = append(deduped, candidates[candidateIndex])
