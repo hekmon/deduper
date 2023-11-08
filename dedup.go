@@ -71,27 +71,29 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 		totalSaved cunits.Bits
 		totalFiles int
 	)
-	fmt.Println()
-	fmt.Println("Dedup listing:")
-	for refFile, matchsDeduped := range dedupedList {
-		fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
-		saved := fileSize * cunits.Bits(len(matchsDeduped))
-		if noDryRun {
-			fmt.Printf("File '%s' (%s) has %d match(s) (saved %s):\n",
-				refFile.FullPath, fileSize, len(matchsDeduped), saved)
-		} else {
-			fmt.Printf("File '%s' (%s) has %d match(s) (potential saving of %s):\n",
-				refFile.FullPath, fileSize, len(matchsDeduped), saved)
-		}
-		for _, matchDeduped := range matchsDeduped {
+	if len(dedupedList) > 0 {
+		fmt.Println()
+		fmt.Println("Dedup listing:")
+		for refFile, matchsDeduped := range dedupedList {
+			fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
+			saved := fileSize * cunits.Bits(len(matchsDeduped))
 			if noDryRun {
-				fmt.Printf("\tMatch '%s' has been replaced by a hardlink\n", matchDeduped.FullPath)
+				fmt.Printf("File '%s' (%s) has %d match(s) (saved %s):\n",
+					refFile.FullPath, fileSize, len(matchsDeduped), saved)
 			} else {
-				fmt.Printf("\tMatch '%s' could have been replaced by a hardlink\n", matchDeduped.FullPath)
+				fmt.Printf("File '%s' (%s) has %d match(s) (potential saving of %s):\n",
+					refFile.FullPath, fileSize, len(matchsDeduped), saved)
 			}
+			for _, matchDeduped := range matchsDeduped {
+				if noDryRun {
+					fmt.Printf("\tMatch '%s' has been replaced by a hardlink\n", matchDeduped.FullPath)
+				} else {
+					fmt.Printf("\tMatch '%s' could have been replaced by a hardlink\n", matchDeduped.FullPath)
+				}
+			}
+			totalSaved += saved
+			totalFiles += len(matchsDeduped)
 		}
-		totalSaved += saved
-		totalFiles += len(matchsDeduped)
 	}
 	fmt.Println()
 	if noDryRun {
