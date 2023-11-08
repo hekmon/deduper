@@ -301,7 +301,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
 	// Prepare the hasher
-	hashReporter := writterProgress{
+	hashReporter := hasherProgress{
 		hasher: sha256.New(),
 		report: reportWritten,
 	}
@@ -319,12 +319,12 @@ func computeHash(path string, reportWritten func(add int)) (hash []byte, err err
 	return
 }
 
-type writterProgress struct {
+type hasherProgress struct {
 	hasher hash.Hash
 	report func(add int)
 }
 
-func (wp writterProgress) Write(p []byte) (n int, err error) {
+func (wp hasherProgress) Write(p []byte) (n int, err error) {
 	n, err = wp.hasher.Write(p)
 	if err == nil || errors.Is(err, io.EOF) {
 		wp.report(n)
