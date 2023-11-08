@@ -154,12 +154,13 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 				continue
 			}
 			// check if candidate inode is the same as reffile inode
-			if candidateSystem.Ino != refFileSystem.Ino {
-				finalCandidates = append(finalCandidates, candidate)
-			} else {
+			if candidateSystem.Ino == refFileSystem.Ino {
 				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
 					candidate.FullPath, refFile.FullPath)
+				continue
 			}
+			// valid candidate
+			finalCandidates = append(finalCandidates, candidate)
 		}
 	} else {
 		finalCandidates = sizeCandidates
