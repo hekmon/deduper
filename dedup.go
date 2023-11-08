@@ -224,10 +224,10 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 	// prepare to compute checksums for reFile and its candidates
 	var (
 		originalHash            []byte
+		candidatesHashes        [][]byte
 		fileProcessingWaitGroup sync.WaitGroup
 		err                     error
 	)
-	candidatesHashes := make([][]byte, len(candidates))
 	// launch reffile hash in a weighted goroutine
 	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	fileProcessingWaitGroup.Add(1)
@@ -241,6 +241,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 		fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 	}()
 	// compute checksums of the candidates in weighted goroutines too
+	candidatesHashes = make([][]byte, len(candidates))
 	for candidateIndex, candidate := range candidates {
 		_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 		fileProcessingWaitGroup.Add(1)
@@ -248,7 +249,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 			defer concurrent.tokenPool.Release(1)
 			defer fileProcessingWaitGroup.Done()
 			if *target, err = computeHash(localCandidate.FullPath, updateProgress); err != nil {
-				concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", localCandidate.FullPath, err)
+				concurrent.errChan <- fmt.Errorf("failed to compute hash of candidate File %s: %w", localCandidate.FullPath, err)
 				return
 			}
 			fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
