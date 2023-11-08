@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"strings"
@@ -300,10 +301,9 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
 	// Prepare the hasher
-	hasher := sha256.New()
-	hasherProgressReporter := writterProgress{
-		writter: hasher,
-		report:  reportWritten,
+	hashReporter := writterProgress{
+		hasher: sha256.New(),
+		report: reportWritten,
 	}
 	// Open file for reading
 	fd, err := os.Open(path)
@@ -312,20 +312,20 @@ func computeHash(path string, reportWritten func(add int)) (hash []byte, err err
 	}
 	defer fd.Close()
 	// Feed it to the hasher
-	if _, err = io.Copy(hasherProgressReporter, fd); err != nil {
+	if _, err = io.Copy(hashReporter, fd); err != nil {
 		return
 	}
-	hash = hasher.Sum(nil)
+	hash = hashReporter.hasher.Sum(nil)
 	return
 }
 
 type writterProgress struct {
-	writter io.Writer
-	report  func(add int)
+	hasher hash.Hash
+	report func(add int)
 }
 
 func (wp writterProgress) Write(p []byte) (n int, err error) {
-	n, err = wp.writter.Write(p)
+	n, err = wp.hasher.Write(p)
 	if err == nil || errors.Is(err, io.EOF) {
 		wp.report(n)
 	}
