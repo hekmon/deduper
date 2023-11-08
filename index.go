@@ -121,9 +121,7 @@ func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted
 		return
 	}
 	// if special file: skip
-	// fmt.Println(pathScan, "mode", fmt.Sprintf("%b", stats.Infos.Mode()), "special modes:", fmt.Sprintf("%b", specialFileModes), "comparaison &:", fmt.Sprintf("%b", stats.Infos.Mode()&specialFileModes))
 	if self.Infos.Mode()&specialFileModes != 0 {
-		// fmt.Println("special file !", path.Join(pathScan, stats.Infos.Name()))
 		return
 	}
 	// if dir, scan it too
@@ -154,7 +152,7 @@ func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted
 		// regular file, update stats
 		scanned.Add(1)
 	}
-	// register to parent (when possible)
+	// register to parent when possible in a non weighted goroutine
 	waitGroup.Add(1)
 	go func() {
 		parent.ChildrenAccess.Lock()
