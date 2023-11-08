@@ -297,7 +297,7 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
 	// Prepare the hasher
 	hasher := sha256.New()
-	progressWritter := writterProgress{
+	hasherProgressReporter := writterProgress{
 		writter: hasher,
 		report:  reportWritten,
 	}
@@ -308,7 +308,7 @@ func computeHash(path string, reportWritten func(add int)) (hash []byte, err err
 	}
 	defer fd.Close()
 	// Feed it to the hasher
-	if _, err = io.Copy(progressWritter, fd); err != nil {
+	if _, err = io.Copy(hasherProgressReporter, fd); err != nil {
 		return
 	}
 	hash = hasher.Sum(nil)
