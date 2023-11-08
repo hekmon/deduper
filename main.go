@@ -12,6 +12,7 @@ import (
 
 var (
 	noDryRun bool
+	force    bool
 )
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 	dirB := flag.String("dirB", "", "Second directory to compare dirA against")
 	workers := flag.Int("workers", runtime.NumCPU(), "Set the maximum numbers of workers")
 	flag.BoolVar(&noDryRun, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
+	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) is not the same")
 	flag.Parse()
 
 	// Test paths first

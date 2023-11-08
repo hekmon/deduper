@@ -138,33 +138,55 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	if len(sizeCandidates) == 0 {
 		return
 	}
-	// Remove candidates that are already hardlink to reffile
+	// start several inodes checks to discard unfitted candidates
 	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
 	if !ok {
 		concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
 		return
 	}
-	var finalCandidates []*TreeStat
-	if refFileSystem.Nlink > 1 {
-		// files has hard links, checking if candidates are already hard linked to ref file
-		finalCandidates = make([]*TreeStat, 0, len(sizeCandidates))
-		for _, candidate := range sizeCandidates {
-			candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
-			if !ok {
-				concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
-				continue
-			}
-			// check if candidate inode is the same as reffile inode
-			if candidateSystem.Ino == refFileSystem.Ino {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
-					candidate.FullPath, refFile.FullPath)
-				continue
-			}
-			// valid candidate
-			finalCandidates = append(finalCandidates, candidate)
+	finalCandidates := make([]*TreeStat, 0, len(sizeCandidates))
+	for _, candidate := range sizeCandidates {
+		candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
+		if !ok {
+			concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
+			continue
 		}
-	} else {
-		finalCandidates = sizeCandidates
+		// in case refFile already has hardlinks, check if candidate inode is the same as reffile inode
+		if refFileSystem.Nlink > 1 && candidateSystem.Ino == refFileSystem.Ino {
+			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
+				candidate.FullPath, refFile.FullPath)
+			continue
+		}
+		// check if inode metadata is identical if necessary
+		if candidateSystem.Uid != refFileSystem.Uid {
+			if !force {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): skipping (activate force mode to retain it)\n",
+					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				continue
+			}
+			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): keeping it anyway (force mode is on)\n",
+				candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+		}
+		if candidateSystem.Gid != refFileSystem.Gid {
+			if !force {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): skipping (activate force mode to retain it)\n",
+					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				continue
+			}
+			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): keeping it anyway (force mode is on)\n",
+				candidate.FullPath, candidateSystem.Gid, refFile.FullPath, refFileSystem.Gid)
+		}
+		if candidateSystem.Mode != refFileSystem.Mode {
+			if !force {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): skipping (activate force mode to retain it)\n",
+					candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+				continue
+			}
+			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): keeping it anyway (force mode is on)\n",
+				candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+		}
+		// candidate survived all the tests, keeping it to the finals
+		finalCandidates = append(finalCandidates, candidate)
 	}
 	if len(finalCandidates) == 0 {
 		return
@@ -258,31 +280,8 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 	}
 	// wait for hashing goroutines to finish
 	fileProcessingWaitGroup.Wait()
-	// time to compare all of them
-	deduped := make([]*TreeStat, 0, len(candidates))
-	for candidateIndex, candidateHash := range candidatesHashes {
-		if !bytes.Equal(originalHash, candidateHash) {
-			continue
-		}
-		// Same file found !
-		if noDryRun {
-			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
-				refFile.FullPath, candidates[candidateIndex].FullPath)
-			if err = os.Remove(candidates[candidateIndex].FullPath); err != nil {
-				concurrent.errChan <- fmt.Errorf("can not make hardlink against '%s': failed to remove '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
-				continue
-			}
-			if err = os.Link(refFile.FullPath, candidates[candidateIndex].FullPath); err != nil {
-				concurrent.errChan <- fmt.Errorf("can not make hardlink between '%s' <> '%s' (file already removed!): %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
-				continue
-			}
-			deduped = append(deduped, candidates[candidateIndex])
-		} else {
-			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
-				refFile.FullPath, candidates[candidateIndex].FullPath)
-			deduped = append(deduped, candidates[candidateIndex])
-		}
-	}
+	// start dedup using the computed hashes
+	deduped := processFileDedupCandidates(refFile, originalHash, candidates, candidatesHashes, concurrent)
 	// Done, show end message
 	if noDryRun {
 		endStatus = fmt.Sprintf("%s: %d/%d candidates hardlinked (saved %s)",
@@ -328,6 +327,34 @@ func (wp hasherProgress) Write(p []byte) (n int, err error) {
 	n, err = wp.hasher.Write(p)
 	if err == nil || errors.Is(err, io.EOF) {
 		wp.report(n)
+	}
+	return
+}
+
+func processFileDedupCandidates(refFile *TreeStat, originalHash []byte, candidates []*TreeStat, candidatesHashes [][]byte, concurrent concurrentToolBox) (deduped []*TreeStat) {
+	deduped = make([]*TreeStat, 0, len(candidates))
+	for candidateIndex, candidateHash := range candidatesHashes {
+		if !bytes.Equal(originalHash, candidateHash) {
+			continue
+		}
+		// Same file found !
+		if noDryRun {
+			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
+				refFile.FullPath, candidates[candidateIndex].FullPath)
+			if err := os.Remove(candidates[candidateIndex].FullPath); err != nil {
+				concurrent.errChan <- fmt.Errorf("can not make hardlink against '%s': failed to remove '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
+				continue
+			}
+			if err := os.Link(refFile.FullPath, candidates[candidateIndex].FullPath); err != nil {
+				concurrent.errChan <- fmt.Errorf("can not make hardlink between '%s' <> '%s' (file already removed!): %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
+				continue
+			}
+			deduped = append(deduped, candidates[candidateIndex])
+		} else {
+			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
+				refFile.FullPath, candidates[candidateIndex].FullPath)
+			deduped = append(deduped, candidates[candidateIndex])
+		}
 	}
 	return
 }
