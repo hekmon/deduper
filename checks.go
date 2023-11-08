@@ -94,7 +94,7 @@ func hardlinkTest(pathA, pathB string) (err error) {
 	testPathA := path.Join(pathA, testFileA)
 	testFile, err := os.OpenFile(testPathA, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640)
 	if err != nil {
-		return fmt.Errorf("failed to create test file for hardlink: %w", err)
+		return fmt.Errorf("failed to create test file for hardlinking: %w", err)
 	}
 	testFile.Close()
 	defer os.Remove(testPathA)
