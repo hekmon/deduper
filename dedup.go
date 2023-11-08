@@ -99,7 +99,7 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 	if noDryRun {
 		fmt.Printf("%d file(s) deduped with hard linking saving a total of %s\n", totalFiles, totalSaved)
 	} else {
-		fmt.Printf("%d file(s) could be deduped with hard links to save a total of %s\n", totalFiles, totalSaved)
+		fmt.Printf("%d file(s) could be deduped with hard linking to save a total of %s\n", totalFiles, totalSaved)
 	}
 	return
 }
