@@ -59,12 +59,13 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 	var workers sync.WaitGroup
 	processNode(pathATree, pathBTree, concurrentToolBox{tokenPool, &workers, progress, globalProgress.Incr, dedupedChan, errChan})
 	workers.Wait()
-	progress.Stop()
 	// Stop utilities goroutines
 	close(dedupedChan)
 	close(errChan)
-	// Print results log
 	<-dedupedDone
+	<-errorsDone
+	// Print results log
+	progress.Stop()
 	var (
 		totalSaved cunits.Bits
 		totalFiles int
@@ -98,7 +99,6 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 		fmt.Printf("%d file(s) could be deduped with hard links to save a total of %s\n", totalFiles, totalSaved)
 	}
 	// wait for all errors to be accounted for before returning
-	<-errorsDone
 	return
 }
 
