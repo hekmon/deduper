@@ -49,7 +49,7 @@ func main() {
 		fmt.Printf("%d error(s) encountered during indexing, please check the logs", errorCount)
 	}
 	fmt.Println()
-	if errorCount = dedup(pathATree, pathBTree, nbAFiles, tokenPool); errorCount > 1 {
+	if errorCount = dedup(pathATree, pathBTree, nbAFiles, tokenPool); errorCount > 0 {
 		fmt.Printf("%d error(s) encountered during processing, please check the logs", errorCount)
 	}
 	fmt.Printf("Done in %v (max workers: %d)\n", (time.Since(start)/time.Second)*time.Second, semaphoreSize)
