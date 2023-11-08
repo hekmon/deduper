@@ -145,15 +145,15 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	}
 	var finalCandidates []*TreeStat
 	if refFileSystem.Nlink > 1 {
+		// files has hard links, checking if candidates are already hard linked to ref file
 		finalCandidates = make([]*TreeStat, 0, len(sizeCandidates))
-		// files has hard links, checking against candidates
 		for _, candidate := range sizeCandidates {
 			candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
 			if !ok {
 				concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", candidate.FullPath)
 				continue
 			}
-			// check if inode is the same
+			// check if candidate inode is the same as reffile inode
 			if candidateSystem.Ino != refFileSystem.Ino {
 				finalCandidates = append(finalCandidates, candidate)
 			} else {
@@ -167,6 +167,9 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	if len(finalCandidates) == 0 {
 		return
 	}
+	// do not report this file as processed (yet) when exiting this fx as candidates must be evaluated:
+	// processFileEvaluateCandidates() will mark this file as processed when done
+	processed = false
 	// final candidates ready, fire a log
 	fullPaths := make([]string, len(finalCandidates))
 	for index, candidate := range finalCandidates {
@@ -180,8 +183,7 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 		processFileEvaluateCandidates(refFile, finalCandidates, concurrent)
 		concurrent.waitGroup.Done()
 	}()
-	// do not report this file as processed (yet) when exiting this fx as candidates must be evaluated: processFileEvaluateCandidates() will mark this file as processed when done
-	processed = false
+	// return to let the caller goroutine continue to walk the mem tree
 }
 
 func findFileWithSize(refSize int64, node *TreeStat) (candidates []*TreeStat) {
