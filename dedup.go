@@ -139,7 +139,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	if len(sizeCandidates) == 0 {
 		return
 	}
-	fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d candidates: %s\n",
+	fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d size candidate(s): %s\n",
 		refFile.FullPath, len(sizeCandidates), sizeCandidates)
 	// start several inodes checks to discard unfitted candidates
 	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
@@ -198,7 +198,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	// processFileEvaluateCandidates() will mark this file as processed when done
 	processed = false
 	// final candidates ready, fire a log
-	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: %s\n",
+	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d final candidate(s) for dedup/hardlinking: %s\n",
 		refFile.FullPath, len(finalCandidates), finalCandidates)
 	// Start a goroutine as handler for this file (no token used as this goroutine will not produce IO itself but will launch others goroutines that will)
 	concurrent.waitGroup.Add(1)
