@@ -4,7 +4,7 @@ Analyse 2 paths on the same file system to found identical files and hard link t
 
 ## How it works
 
-* Indexing: both paths will be analyzed and the structure of the directories tree and their corresponding inodes mapped in memory (files & directory)
+* Indexing: both paths will be analyzed and the structure of the directories tree and their corresponding inodes mapped in memory (files & directories)
 * Then the structure of the A path will be walked and for each regular file, the mapped memory structure of path B will be analyzed to find potential candidates
   * First a list of all files in B having the exact same size of the A files analyzed will be compiled (empty files will be ignored)
   * Then this list will be pruned based on several criterias
