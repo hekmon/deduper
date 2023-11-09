@@ -12,9 +12,12 @@ Analyse 2 paths on the same file system to found identical files and hard link t
     * Files that do not have the same inode metadata (ownership [uid, gid] and file mode) will be removed from the candidates list to avoid breaking potential current access to these files (as hardlinks share the same metadata by design)
       * Unless the `-force` flag is set, in that case candidates are kept (but will have their metadata changed once hardlinking is done)
     * For candidates that are still on the list, a SHA256 checksum will be performed to ensure they have indeed the same content as the reference file in A currently being processed
-* For all candidates that have passed all the tests and are still on the candidates list:
-  * They will be removed (in order to free their path)
-  * Reffile in A will be hard linked to the path that the B candidate had, making it available once again but dedupped with A this time
+* For candidates that have passed all the tests and are still on the candidates list:
+  * if the `-apply` flag has been set
+    * They will be removed (in order to free their path)
+    * Reffile in A will be hard linked to the path that the B candidate had, making it available once again but dedupped with A this time
+  * if the `-apply` flag has not been set
+    * A reporting will be printed of what would have been done (how saved) with the flag on
 
 ## Usage
 
