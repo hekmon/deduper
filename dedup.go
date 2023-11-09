@@ -9,7 +9,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -21,11 +20,11 @@ import (
 )
 
 type dedupedReport struct {
-	Reference *TreeStat
-	Files     []*TreeStat
+	Reference  *FileInfos
+	HardLinked FileInfosList
 }
 
-func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semaphore.Weighted) (errorCount int) {
+func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaphore.Weighted) (errorCount int) {
 	// Setup global progress bar
 	progress := uiprogress.New()
 	progress.RefreshInterval = time.Second
@@ -49,10 +48,10 @@ func dedup(pathATree, pathBTree *TreeStat, totalAFiles int64, tokenPool *semapho
 	// report logger
 	dedupedChan := make(chan dedupedReport)
 	dedupedDone := make(chan any)
-	dedupedList := make(map[*TreeStat][]*TreeStat)
+	dedupedList := make(map[*FileInfos]FileInfosList)
 	go func() {
 		for deduped := range dedupedChan {
-			dedupedList[deduped.Reference] = deduped.Files
+			dedupedList[deduped.Reference] = deduped.HardLinked
 		}
 		close(dedupedDone)
 	}()
@@ -113,7 +112,7 @@ type concurrentToolBox struct {
 	errChan            chan<- error
 }
 
-func processNode(refFile, pathBTree *TreeStat, concurrent concurrentToolBox) {
+func processNode(refFile, pathBTree *FileInfos, concurrent concurrentToolBox) {
 	if refFile.Infos.Mode().IsDir() {
 		for _, child := range refFile.Children {
 			processNode(child, pathBTree, concurrent)
@@ -123,7 +122,7 @@ func processNode(refFile, pathBTree *TreeStat, concurrent concurrentToolBox) {
 	}
 }
 
-func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurrentToolBox) {
+func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurrentToolBox) {
 	// If we do not make it to candidates evaluation, report the file as processed
 	processed := true
 	defer func() {
@@ -140,13 +139,15 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	if len(sizeCandidates) == 0 {
 		return
 	}
+	fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d candidates: %s\n",
+		refFile.FullPath, len(sizeCandidates), sizeCandidates)
 	// start several inodes checks to discard unfitted candidates
 	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
 	if !ok {
 		concurrent.errChan <- fmt.Errorf("can not check for hardlinks for '%s': backing storage device can not be checked", refFile.FullPath)
 		return
 	}
-	finalCandidates := make([]*TreeStat, 0, len(sizeCandidates))
+	finalCandidates := make(FileInfosList, 0, len(sizeCandidates))
 	for _, candidate := range sizeCandidates {
 		candidateSystem, ok := candidate.Infos.Sys().(*syscall.Stat_t)
 		if !ok {
@@ -197,12 +198,8 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	// processFileEvaluateCandidates() will mark this file as processed when done
 	processed = false
 	// final candidates ready, fire a log
-	fullPaths := make([]string, len(finalCandidates))
-	for index, candidate := range finalCandidates {
-		fullPaths[index] = candidate.FullPath
-	}
-	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: '%s'\n",
-		refFile.FullPath, len(finalCandidates), strings.Join(fullPaths, "', '"))
+	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d candidate(s) for dedup/hardlinking: %s\n",
+		refFile.FullPath, len(finalCandidates), finalCandidates)
 	// Start a goroutine as handler for this file (no token used as this goroutine will not produce IO itself but will launch others goroutines that will)
 	concurrent.waitGroup.Add(1)
 	go func() {
@@ -212,7 +209,7 @@ func processFileFindCandidates(refFile, pathBTree *TreeStat, concurrent concurre
 	// return to let the caller goroutine continue to walk the mem tree
 }
 
-func findFileWithSize(refSize int64, node *TreeStat) (candidates []*TreeStat) {
+func findFileWithSize(refSize int64, node *FileInfos) (candidates FileInfosList) {
 	if node.Infos.Mode().IsDir() {
 		for _, child := range node.Children {
 			candidates = append(candidates, findFileWithSize(refSize, child)...)
@@ -225,7 +222,7 @@ func findFileWithSize(refSize int64, node *TreeStat) (candidates []*TreeStat) {
 	return
 }
 
-func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, concurrent concurrentToolBox) {
+func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList, concurrent concurrentToolBox) {
 	// Mark the file as processed when done
 	defer concurrent.processedReporting()
 	// create the progress bar for this particular file
@@ -263,21 +260,21 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 			concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
-		fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
+		// fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 	}()
 	// compute checksums of the candidates in weighted goroutines too
 	candidatesHashes = make([][]byte, len(candidates))
 	for candidateIndex, candidate := range candidates {
 		_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 		fileProcessingWaitGroup.Add(1)
-		go func(localCandidate *TreeStat, target *[]byte) {
+		go func(localCandidate *FileInfos, target *[]byte) {
 			defer concurrent.tokenPool.Release(1)
 			defer fileProcessingWaitGroup.Done()
 			if *target, err = computeHash(localCandidate.FullPath, updateProgress); err != nil {
 				concurrent.errChan <- fmt.Errorf("failed to compute hash of candidate File %s: %w", localCandidate.FullPath, err)
 				return
 			}
-			fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
+			// fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
 		}(candidate, &(candidatesHashes[candidateIndex]))
 	}
 	// wait for hashing goroutines to finish
@@ -293,10 +290,12 @@ func processFileEvaluateCandidates(refFile *TreeStat, candidates []*TreeStat, co
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	}
 	fileBar.Incr() // add the last fake byte to trigger one last update of the append msg
-	// send report
-	concurrent.dedupedChan <- dedupedReport{
-		Reference: refFile,
-		Files:     deduped,
+	// send dedup report if any files deduped
+	if len(deduped) > 0 {
+		concurrent.dedupedChan <- dedupedReport{
+			Reference:  refFile,
+			HardLinked: deduped,
+		}
 	}
 }
 
@@ -333,10 +332,12 @@ func (wp hasherProgress) Write(p []byte) (n int, err error) {
 	return
 }
 
-func processFileDedupCandidates(refFile *TreeStat, originalHash []byte, candidates []*TreeStat, candidatesHashes [][]byte, concurrent concurrentToolBox) (deduped []*TreeStat) {
-	deduped = make([]*TreeStat, 0, len(candidates))
+func processFileDedupCandidates(refFile *FileInfos, originalHash []byte, candidates FileInfosList, candidatesHashes [][]byte, concurrent concurrentToolBox) (deduped FileInfosList) {
+	deduped = make(FileInfosList, 0, len(candidates))
 	for candidateIndex, candidateHash := range candidatesHashes {
 		if !bytes.Equal(originalHash, candidateHash) {
+			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' checksum does not match ref file '%s' checksum: skipping\n",
+				candidates[candidateIndex].FullPath, refFile.FullPath)
 			continue
 		}
 		// Same file found !

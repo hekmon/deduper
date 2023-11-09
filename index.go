@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,18 +19,26 @@ const (
 	specialFileModes = os.ModeSymlink | os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice | os.ModeIrregular
 )
 
-type TreeStat struct {
+type FileInfos struct {
 	FullPath       string
 	Infos          fs.FileInfo
-	Children       []*TreeStat
+	Children       FileInfosList
 	ChildrenAccess *sync.Mutex
 }
 
-func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *TreeStat, nbAFiles int64, errorCount int) {
+type FileInfosList []*FileInfos
+
+func (list FileInfosList) String() string {
+	fullPaths := make([]string, len(list))
+	for index, candidate := range list {
+		fullPaths[index] = candidate.FullPath
+	}
+	return "'" + strings.Join(fullPaths, "', '") + "'"
+}
+
+func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathBTree *FileInfos, nbAFiles int64, errorCount int) {
 	// Prepare to launch goroutines
-	var (
-		workers sync.WaitGroup
-	)
+	var workers sync.WaitGroup
 	errChan := make(chan error)
 	scannedA := new(atomic.Int64)
 	scannedB := new(atomic.Int64)
@@ -73,8 +82,8 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		close(loggerDone)
 	}()
 	// Launch the path A walker
-	fakeAParent := TreeStat{
-		Children:       make([]*TreeStat, 0, 1),
+	fakeAParent := FileInfos{
+		Children:       make(FileInfosList, 0, 1),
 		ChildrenAccess: new(sync.Mutex),
 	}
 	_ = tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
@@ -85,8 +94,8 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 		workers.Done()
 	}()
 	// Launch the path B walker
-	fakeBParent := TreeStat{
-		Children:       make([]*TreeStat, 0, 1),
+	fakeBParent := FileInfos{
+		Children:       make(FileInfosList, 0, 1),
 		ChildrenAccess: new(sync.Mutex),
 	}
 	_ = tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
@@ -110,9 +119,9 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	return
 }
 
-func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Int64, errChan chan<- error) {
+func indexChild(pathScan string, parent *FileInfos, tokenPool *semaphore.Weighted, waitGroup *sync.WaitGroup, scanned *atomic.Int64, errChan chan<- error) {
 	var err error
-	self := TreeStat{
+	self := FileInfos{
 		FullPath: pathScan,
 	}
 	// get infos
@@ -133,7 +142,7 @@ func indexChild(pathScan string, parent *TreeStat, tokenPool *semaphore.Weighted
 			return
 		}
 		// process list
-		self.Children = make([]*TreeStat, 0, len(entries))
+		self.Children = make(FileInfosList, 0, len(entries))
 		self.ChildrenAccess = new(sync.Mutex)
 		for _, entry := range entries {
 			// can we launch it concurrently ?
