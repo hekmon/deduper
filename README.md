@@ -17,7 +17,7 @@ Analyse 2 paths on the same file system to found identical files and hard link t
     * They will be removed (in order to free their path)
     * Reffile in A will be hard linked to the path that the B candidate had, making it available once again but dedupped with A this time
   * if the `-apply` flag has not been set
-    * A reporting will be printed of what would have been done (how saved) with the flag on
+    * A reporting will be printed of what would have been done (and saved) with the flag on
 
 ## Usage
 
