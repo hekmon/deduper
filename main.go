@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	reasonableMaxParallelIO = 8
+	reasonableMaxParallelIO = 6
 )
 
 var (
