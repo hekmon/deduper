@@ -123,6 +123,9 @@ func processNode(refFile, pathBTree *FileInfos, concurrent concurrentToolBox) {
 }
 
 func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurrentToolBox) {
+	// if all IO workers are busy, slow down a little bit
+	_ = concurrent.tokenPool.Acquire(context.Background(), 1)
+	concurrent.tokenPool.Release(1)
 	// If we do not make it to candidates evaluation, report the file as processed
 	processed := true
 	defer func() {
