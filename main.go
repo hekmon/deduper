@@ -10,16 +10,28 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-var (
-	noDryRun bool
-	force    bool
+const (
+	reasonableMaxParallelIO = 8
 )
 
+var (
+	noDryRun          bool
+	force             bool
+	defaultMaxWorkers int
+)
+
+func init() {
+	defaultMaxWorkers = runtime.NumCPU()
+	if defaultMaxWorkers > reasonableMaxParallelIO {
+		defaultMaxWorkers = reasonableMaxParallelIO
+	}
+}
+
 func main() {
-	// Set flags
+	// Process launch flags
 	dirA := flag.String("dirA", "", "Referential directory")
 	dirB := flag.String("dirB", "", "Second directory to compare dirA against")
-	workers := flag.Int("workers", runtime.NumCPU(), "Set the maximum numbers of workers")
+	workers := flag.Int("workers", defaultMaxWorkers, "Set the maximum numbers of workers that will perform IO tasks")
 	flag.BoolVar(&noDryRun, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
 	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) is not the same")
 	flag.Parse()
