@@ -225,6 +225,8 @@ func findFileWithSize(refSize int64, node *FileInfos) (candidates FileInfosList)
 func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList, concurrent concurrentToolBox) {
 	// Mark the file as processed when done
 	defer concurrent.processedReporting()
+	// Do not create the progress bar (yet) if there is not at least one worker available for the original hash
+	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	// create the progress bar for this particular file
 	endStatus := ""
 	totalSize := cunits.ImportInByte((float64(refFile.Infos.Size() * int64(len(candidates)+1))) + 1) // add one last fake byte to trigger print of end message
@@ -250,8 +252,7 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 		fileProcessingWaitGroup sync.WaitGroup
 		err                     error
 	)
-	// launch reffile hash in a weighted goroutine
-	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
+	// launch reffile hash in a weighted goroutine (token already took before creating the progress bar)
 	fileProcessingWaitGroup.Add(1)
 	go func() {
 		defer concurrent.tokenPool.Release(1)
