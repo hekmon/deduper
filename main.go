@@ -33,7 +33,7 @@ func main() {
 	dirB := flag.String("dirB", "", "Second directory to compare dirA against")
 	workers := flag.Int("workers", defaultMaxWorkers, "Set the maximum numbers of workers that will perform IO tasks")
 	flag.BoolVar(&noDryRun, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
-	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) is not the same")
+	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) are not the same")
 	flag.Parse()
 
 	// Test paths first
@@ -66,5 +66,5 @@ func main() {
 	if errorCount = dedup(pathATree, pathBTree, nbAFiles, tokenPool); errorCount > 0 {
 		fmt.Printf("%d error(s) encountered during processing, please check the logs", errorCount)
 	}
-	fmt.Printf("Done in %v (max workers: %d)\n", (time.Since(start)/time.Millisecond)*time.Millisecond, semaphoreSize)
+	fmt.Printf("Done in %v (max IO workers: %d)\n", (time.Since(start)/time.Millisecond)*time.Millisecond, semaphoreSize)
 }
