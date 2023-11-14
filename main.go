@@ -17,6 +17,7 @@ const (
 var (
 	noDryRun          bool
 	force             bool
+	debug             bool
 	defaultMaxWorkers int
 )
 
@@ -34,6 +35,7 @@ func main() {
 	workers := flag.Int("workers", defaultMaxWorkers, "Set the maximum numbers of workers that will perform IO tasks")
 	flag.BoolVar(&noDryRun, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
 	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) are not the same")
+	flag.BoolVar(&debug, "debug", false, "Show debug logs during the analysis phase")
 	flag.Parse()
 
 	// Test paths first

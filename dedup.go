@@ -142,8 +142,10 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	if len(sizeCandidates) == 0 {
 		return
 	}
-	fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d size candidate(s): %s\n",
-		refFile.FullPath, len(sizeCandidates), sizeCandidates)
+	if debug {
+		fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d size candidate(s): %s\n",
+			refFile.FullPath, len(sizeCandidates), sizeCandidates)
+	}
 	// start several inodes checks to discard unfitted candidates
 	refFileSystem, ok := refFile.Infos.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -159,37 +161,51 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 		}
 		// in case refFile already has hardlinks, check if candidate inode is the same as reffile inode
 		if refFileSystem.Nlink > 1 && candidateSystem.Ino == refFileSystem.Ino {
-			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
-				candidate.FullPath, refFile.FullPath)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
+					candidate.FullPath, refFile.FullPath)
+			}
 			continue
 		}
 		// check if inode metadata is identical if necessary
 		if candidateSystem.Uid != refFileSystem.Uid {
 			if !force {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): skipping (activate force mode to retain it)\n",
-					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				if debug {
+					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): skipping (activate force mode to retain it)\n",
+						candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				}
 				continue
 			}
-			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): keeping it anyway (force mode is on)\n",
-				candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): keeping it anyway (force mode is on)\n",
+					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+			}
 		}
 		if candidateSystem.Gid != refFileSystem.Gid {
 			if !force {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): skipping (activate force mode to retain it)\n",
-					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				if debug {
+					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): skipping (activate force mode to retain it)\n",
+						candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
+				}
 				continue
 			}
-			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): keeping it anyway (force mode is on)\n",
-				candidate.FullPath, candidateSystem.Gid, refFile.FullPath, refFileSystem.Gid)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): keeping it anyway (force mode is on)\n",
+					candidate.FullPath, candidateSystem.Gid, refFile.FullPath, refFileSystem.Gid)
+			}
 		}
 		if candidateSystem.Mode != refFileSystem.Mode {
 			if !force {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): skipping (activate force mode to retain it)\n",
-					candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+				if debug {
+					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): skipping (activate force mode to retain it)\n",
+						candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+				}
 				continue
 			}
-			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): keeping it anyway (force mode is on)\n",
-				candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): keeping it anyway (force mode is on)\n",
+					candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
+			}
 		}
 		// candidate survived all the tests, keeping it to the finals
 		finalCandidates = append(finalCandidates, candidate)
@@ -200,9 +216,11 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	// do not report this file as processed (yet) when exiting this fx as candidates must be evaluated:
 	// processFileEvaluateCandidates() will mark this file as processed when done
 	processed = false
-	// final candidates ready, fire a log
-	fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d final candidate(s) for dedup/hardlinking: %s\n",
-		refFile.FullPath, len(finalCandidates), finalCandidates)
+	// final candidates ready
+	if debug {
+		fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d final candidate(s) for dedup/hardlinking: %s\n",
+			refFile.FullPath, len(finalCandidates), finalCandidates)
+	}
 	// Start a goroutine as handler for this file (no token used as this goroutine will not produce IO itself but will launch others goroutines that will)
 	concurrent.waitGroup.Add(1)
 	go func() {
@@ -264,7 +282,9 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 			concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
-		// fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
+		if debug {
+			fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
+		}
 	}()
 	// compute checksums of the candidates in weighted goroutines too
 	candidatesHashes = make([][]byte, len(candidates))
@@ -278,7 +298,9 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 				concurrent.errChan <- fmt.Errorf("failed to compute hash of candidate File %s: %w", localCandidate.FullPath, err)
 				return
 			}
-			// fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
+			}
 		}(candidate, &(candidatesHashes[candidateIndex]))
 	}
 	// wait for hashing goroutines to finish
@@ -340,8 +362,10 @@ func processFileDedupCandidates(refFile *FileInfos, originalHash []byte, candida
 	deduped = make(FileInfosList, 0, len(candidates))
 	for candidateIndex, candidateHash := range candidatesHashes {
 		if !bytes.Equal(originalHash, candidateHash) {
-			fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' checksum does not match ref file '%s' checksum: skipping\n",
-				candidates[candidateIndex].FullPath, refFile.FullPath)
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' checksum does not match ref file '%s' checksum: skipping\n",
+					candidates[candidateIndex].FullPath, refFile.FullPath)
+			}
 			continue
 		}
 		// Same file found !
