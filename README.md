@@ -24,15 +24,19 @@ Analyse 2 paths on the same file system to found identical files and hard link t
 ```
 Usage of ./deduper:
   -apply
-    	By default deduper run in dry run mode: set this flag to actually apply changes
+        By default deduper run in dry run mode: set this flag to actually apply changes
+  -debug
+        Show debug logs during the analysis phase
   -dirA string
-    	Referential directory
+        Referential directory
   -dirB string
-    	Second directory to compare dirA against
+        Second directory to compare dirA against
   -force
-    	Dedup files that have the same content even if their inode metadata (ownership and mode) is not the same
+        Dedup files that have the same content even if their inode metadata (ownership and mode) are not the same
+  -minSize string
+        Set the minimum size a file must have to be kept for analysis (ex: 100MiB)
   -workers int
-    	Set the maximum numbers of workers (default 40)
+        Set the maximum numbers of workers that will perform IO tasks (default 6)
 ```
 
 ### Example
