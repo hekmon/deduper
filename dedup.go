@@ -137,6 +137,17 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	if refFile.Infos.Size() == 0 {
 		return
 	}
+	// if min size set, enforce it
+	if minSize != 0 {
+		fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
+		if fileSize < minSize {
+			if debug {
+				fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' size (%s) is lower than minSize (%s): skipping\n",
+					refFile.FullPath, fileSize, minSize)
+			}
+			return
+		}
+	}
 	// try to find candidates by size
 	sizeCandidates := findFileWithSize(refFile.Infos.Size(), pathBTree)
 	if len(sizeCandidates) == 0 {
