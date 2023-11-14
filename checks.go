@@ -55,7 +55,7 @@ func validatePaths(pathA, pathB string) (cleanPathA, cleanPathB string, err erro
 		return
 	}
 	// Final check, let's try to make a hardlink
-	if noDryRun {
+	if apply {
 		err = hardlinkTest(cleanPathA, cleanPathB)
 	}
 	return

@@ -76,7 +76,7 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 		for refFile, matchsDeduped := range dedupedList {
 			fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
 			saved := fileSize * cunits.Bits(len(matchsDeduped))
-			if noDryRun {
+			if apply {
 				fmt.Printf("File '%s' (%s) has %d match(s) (saved %s):\n",
 					refFile.FullPath, fileSize, len(matchsDeduped), saved)
 			} else {
@@ -84,7 +84,7 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 					refFile.FullPath, fileSize, len(matchsDeduped), saved)
 			}
 			for _, matchDeduped := range matchsDeduped {
-				if noDryRun {
+				if apply {
 					fmt.Printf("\tMatch '%s' has been replaced by a hardlink\n", matchDeduped.FullPath)
 				} else {
 					fmt.Printf("\tMatch '%s' could have been replaced by a hardlink\n", matchDeduped.FullPath)
@@ -95,7 +95,7 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 		}
 	}
 	fmt.Println()
-	if noDryRun {
+	if apply {
 		fmt.Printf("%d file(s) deduped with hard linking saving a total of %s\n", totalFiles, totalSaved)
 	} else {
 		fmt.Printf("%d file(s) could be deduped with hard linking to save a total of %s\n", totalFiles, totalSaved)
@@ -319,7 +319,7 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	// start dedup using the computed hashes
 	deduped := processFileDedupCandidates(refFile, originalHash, candidates, candidatesHashes, concurrent)
 	// Done, show end message
-	if noDryRun {
+	if apply {
 		endStatus = fmt.Sprintf("%s: %d/%d candidates hardlinked (saved %s)",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	} else {
@@ -380,7 +380,7 @@ func processFileDedupCandidates(refFile *FileInfos, originalHash []byte, candida
 			continue
 		}
 		// Same file found !
-		if noDryRun {
+		if apply {
 			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
 				refFile.FullPath, candidates[candidateIndex].FullPath)
 			if err := os.Remove(candidates[candidateIndex].FullPath); err != nil {

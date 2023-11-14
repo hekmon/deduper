@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	noDryRun          bool
+	apply             bool
 	force             bool
 	debug             bool
 	minSize           cunits.Bits
@@ -37,7 +37,7 @@ func main() {
 	dirB := flag.String("dirB", "", "Second directory to compare dirA against")
 	workers := flag.Int("workers", defaultMaxWorkers, "Set the maximum numbers of workers that will perform IO tasks")
 	minSizeStr := flag.String("minSize", "", "Set the minimum size a file must have to be kept for analysis (ex: 100MiB)")
-	flag.BoolVar(&noDryRun, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
+	flag.BoolVar(&apply, "apply", false, "By default deduper run in dry run mode: set this flag to actually apply changes")
 	flag.BoolVar(&force, "force", false, "Dedup files that have the same content even if their inode metadata (ownership and mode) are not the same")
 	flag.BoolVar(&debug, "debug", false, "Show debug logs during the analysis phase")
 	flag.Parse()
@@ -64,7 +64,7 @@ func main() {
 
 	// Start Processing
 	start := time.Now()
-	if noDryRun {
+	if apply {
 		fmt.Println("/!\\ WARNING: running in apply mode: files will be replaced by hardlinks if they match!")
 	} else {
 		fmt.Println("Running in dry run mode. Use -apply to actually dedup files.")
