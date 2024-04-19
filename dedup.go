@@ -26,12 +26,12 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 	// Setup global progress bar
 	// liveprogress.RefreshInterval = time.Second
 	barConfig := liveprogress.DefaultConfig
-	// barConfig.Width = 30
+	barConfig.Width = 30
 	barConfig.Empty = ' '
-	globalProgress := liveprogress.AddBar(uint64(totalAFiles), liveprogress.DefaultConfig,
+	globalProgress := liveprogress.AddBar(uint64(totalAFiles), barConfig,
 		liveprogress.AppendPercent(),
 		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
-			return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalAFiles)
+			return fmt.Sprintf(" Global progress: %d/%d files processed", b.Current(), totalAFiles)
 		}),
 	)
 	var (
@@ -290,7 +290,7 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	fileBar := liveprogress.AddBar(uint64(totalSize.Byte()), concurrent.barConfig,
 		liveprogress.AppendPercent(),
 		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
-			return fmt.Sprintf("%s + %d candidate(s) (total hashing: %s/%s)",
+			return fmt.Sprintf(" %s + %d candidate(s) (total hashing: %s/%s)",
 				refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 		}),
 	)
