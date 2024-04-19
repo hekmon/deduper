@@ -21,5 +21,5 @@
 go.work
 
 # Dev
-/deduper
+/deduper*
 example/dir*
