@@ -41,4 +41,8 @@ Usage of ./deduper:
 
 ### Example
 
-TODO
+```bash
+./deduper -minSize 10MiB -workers 8 -dirA "$(pwd)/example/dirA" -dirB "$(pwd)/example/dirB" -apply
+```
+
+![Example GIF](https://github.com/hekmon/deduper/raw/main/example/example.gif)
