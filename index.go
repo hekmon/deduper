@@ -103,8 +103,7 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	totalA := scannedA.Load()
 	totalB := scannedB.Load()
 	total := totalA + totalB
-	fmt.Fprintf(stdout, "Indexing done: %d total files found (%d on '%s' & %d on '%s')\n",
-		total, totalA, pathA, totalB, pathB)
+	fmt.Fprintf(stdout, "Indexing done: %d total files found\n\t%d on %s\n\t%d on %s\n", total, totalA, pathA, totalB, pathB)
 	nbAFiles = totalA
 	return
 }

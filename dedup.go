@@ -286,14 +286,10 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	// Do not create the progress bar (yet) if there is not at least one worker available for the original hash
 	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	// create the progress bar for this particular file
-	endStatus := ""
 	totalSize := cunits.ImportInByte((float64(refFile.Infos.Size() * int64(len(candidates)+1))))
 	fileBar := liveprogress.AddBar(uint64(totalSize.Byte()), concurrent.barConfig,
 		liveprogress.AppendPercent(),
 		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
-			if endStatus != "" {
-				return endStatus
-			}
 			return fmt.Sprintf("%s + %d candidate(s) (total hashing: %s/%s)",
 				refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 		}),
@@ -341,12 +337,13 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	deduped := processFileDedupCandidates(refFile, originalHash, candidates, candidatesHashes, concurrent)
 	// Done, show end message
 	if apply {
-		endStatus = fmt.Sprintf("%s: %d/%d candidates hardlinked (saved %s)",
+		fmt.Fprintf(concurrent.stdout, "%s: %d/%d candidates hardlinked (saved %s)\n",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	} else {
-		endStatus = fmt.Sprintf("%s: %d/%d candidates could be hardlinked (potential saving of %s)",
+		fmt.Fprintf(concurrent.stdout, "%s: %d/%d candidates could be hardlinked (potential saving of %s)\n",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	}
+	liveprogress.RemoveBar(fileBar)
 	// send dedup report if any files deduped
 	if len(deduped) > 0 {
 		concurrent.dedupedChan <- dedupedReport{
