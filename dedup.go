@@ -293,6 +293,10 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 			return fmt.Sprintf(" %s + %d candidate(s) (total hashing: %s/%s)",
 				refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
 		}),
+		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
+			return " Remaining:"
+		}),
+		liveprogress.AppendTimeRemaining(),
 	)
 	// prepare to compute checksums for reFile and its candidates
 	var (
