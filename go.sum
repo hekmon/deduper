@@ -1,7 +1,7 @@
 github.com/hekmon/cunits/v2 v2.1.0 h1:k6wIjc4PlacNOHwKEMBgWV2/c8jyD4eRMs5mR1BBhI0=
 github.com/hekmon/cunits/v2 v2.1.0/go.mod h1:9r1TycXYXaTmEWlAIfFV8JT+Xo59U96yUJAYHxzii2M=
-github.com/hekmon/liveprogress v1.2.0 h1:+wmA5rHypQbwNdDJebCm+sjcJMS/TEqyEKZPDKOZtJ8=
-github.com/hekmon/liveprogress v1.2.0/go.mod h1:C7ldkVbfiTbmeYq1G+Tu3tslWpLSMRFOV2LK1oiuXLk=
+github.com/hekmon/liveprogress v1.2.1 h1:mdKSVf8m8x410fEAyHevsZHvvtrhD1rcJX1KnBUnbks=
+github.com/hekmon/liveprogress v1.2.1/go.mod h1:C7ldkVbfiTbmeYq1G+Tu3tslWpLSMRFOV2LK1oiuXLk=
 github.com/hekmon/liveterm v1.0.1 h1:23hxmemNnx+s20PC4ZybcFoDdOMHrboqZ9302WX6dvs=
 github.com/hekmon/liveterm v1.0.1/go.mod h1:WsfqTX1GfvmB52vl26ULY98PLRg7vHg0mN6fZ9sdcA8=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

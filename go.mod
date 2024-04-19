@@ -4,7 +4,7 @@ go 1.21.2
 
 require (
 	github.com/hekmon/cunits/v2 v2.1.0
-	github.com/hekmon/liveprogress v1.2.0
+	github.com/hekmon/liveprogress v1.2.1
 	github.com/hekmon/liveterm v1.0.1
 	golang.org/x/sync v0.5.0
 )
