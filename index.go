@@ -3,15 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/gosuri/uilive"
+	"github.com/hekmon/liveterm"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -42,44 +42,30 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	errChan := make(chan error)
 	scannedA := new(atomic.Int64)
 	scannedB := new(atomic.Int64)
-	termStatus := uilive.New()
-	termStatus.Start()
-	defer termStatus.Stop()
+	// Prepare live term
+	var stdout, stderr io.Writer
+	err := liveterm.Start()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to start liveterm: %s\n", err)
+		stdout = os.Stdout
+		stderr = os.Stderr
+	} else {
+		defer liveterm.Stop(true)
+		stdout = liveterm.Bypass()
+		stderr = stdout
+		liveterm.SetSingleLineUpdateFx(func() string {
+			return fmt.Sprintf("Indexing: %d regular files found on '%s' & %d regular files found on '%s'\n",
+				scannedA.Load(), pathA, scannedB.Load(), pathB)
+		})
+	}
 	// error logger
 	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
-			fmt.Fprintf(termStatus.Bypass(), "%s\n", err)
+			fmt.Fprintf(stderr, "ERROR: %s\n", err)
 			errorCount++
 		}
 		close(errorsDone)
-	}()
-	// stats logger
-	loggerCtx, loggerCtxCancel := context.WithCancel(context.Background())
-	defer loggerCtxCancel() // in case we do not reach the end of the fx
-	loggerDone := make(chan any)
-	go func() {
-		for loggerCtx.Err() == nil {
-			timer := time.NewTimer(100 * time.Millisecond)
-			select {
-			case <-loggerCtx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
-				break
-			case <-timer.C:
-				// proceed
-			}
-			fmt.Fprintf(termStatus, "Indexing: %d regular files found on '%s' & %d regular files found on '%s'\n",
-				scannedA.Add(0), pathA, scannedB.Add(0), pathB)
-		}
-		totalA := scannedA.Add(0)
-		totalB := scannedB.Add(0)
-		total := totalA + totalB
-		fmt.Fprintf(termStatus, "Indexing done: %d total files found (%d on '%s' & %d on '%s')\n",
-			total, totalA, pathA, totalB, pathB)
-		nbAFiles = totalA
-		close(loggerDone)
 	}()
 	// Launch the path A walker
 	fakeAParent := FileInfos{
@@ -108,14 +94,18 @@ func index(pathA, pathB string, tokenPool *semaphore.Weighted) (pathATree, pathB
 	// Wait for walkers to return
 	workers.Wait()
 	// Stop utilities goroutines
-	loggerCtxCancel()
 	close(errChan)
 	// Return both trees root
 	pathATree = fakeAParent.Children[0]
 	pathBTree = fakeBParent.Children[0]
-	// Print errors if any
-	<-loggerDone
+	// Print results
 	<-errorsDone
+	totalA := scannedA.Load()
+	totalB := scannedB.Load()
+	total := totalA + totalB
+	fmt.Fprintf(stdout, "Indexing done: %d total files found (%d on '%s' & %d on '%s')\n",
+		total, totalA, pathA, totalB, pathB)
+	nbAFiles = totalA
 	return
 }
 

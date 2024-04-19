@@ -10,12 +10,10 @@ import (
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
 	"syscall"
-	"time"
 
-	"github.com/gosuri/uiprogress"
 	"github.com/hekmon/cunits/v2"
+	"github.com/hekmon/liveprogress"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -26,21 +24,34 @@ type dedupedReport struct {
 
 func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaphore.Weighted) (errorCount int) {
 	// Setup global progress bar
-	progress := uiprogress.New()
-	progress.RefreshInterval = time.Second
-	progress.Width = 30
-	globalProgress := progress.AddBar(int(totalAFiles)).AppendCompleted()
-	globalProgress.Empty = ' '
-	globalProgress.AppendFunc(func(b *uiprogress.Bar) string {
-		return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalAFiles)
-	})
-	progress.Start()
+	// liveprogress.RefreshInterval = time.Second
+	barConfig := liveprogress.DefaultConfig
+	// barConfig.Width = 30
+	barConfig.Empty = ' '
+	globalProgress := liveprogress.AddBar(uint64(totalAFiles), liveprogress.DefaultConfig,
+		liveprogress.AppendPercent(),
+		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
+			return fmt.Sprintf("Global progress: %d/%d files processed", b.Current(), totalAFiles)
+		}),
+	)
+	var (
+		liveprogressErr error
+		stdout, stderr  io.Writer
+	)
+	if liveprogressErr = liveprogress.Start(); liveprogressErr != nil {
+		fmt.Fprintf(os.Stderr, "failed to start liveprogress: %s\n", liveprogressErr)
+		stdout = os.Stdout
+		stderr = os.Stderr
+	} else {
+		stdout = liveprogress.Bypass()
+		stderr = stdout
+	}
 	// error logger
 	errChan := make(chan error)
 	errorsDone := make(chan any)
 	go func() {
 		for err := range errChan {
-			fmt.Fprintf(progress.Bypass(), "ERROR: %s\n", err)
+			fmt.Fprintf(stderr, "ERROR: %s\n", err)
 			errorCount++
 		}
 		close(errorsDone)
@@ -57,7 +68,19 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 	}()
 	// start nodes processing from the top of the tree
 	var workers sync.WaitGroup
-	processNode(pathATree, pathBTree, concurrentToolBox{tokenPool, &workers, progress, globalProgress.Incr, dedupedChan, errChan})
+	processNode(
+		pathATree,
+		pathBTree,
+		concurrentToolBox{
+			tokenPool:          tokenPool,
+			waitGroup:          &workers,
+			stdout:             stdout,
+			barConfig:          barConfig,
+			processedReporting: globalProgress.CurrentIncrement,
+			dedupedChan:        dedupedChan,
+			errChan:            errChan,
+		},
+	)
 	workers.Wait()
 	// Stop utilities goroutines
 	close(dedupedChan)
@@ -65,7 +88,9 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 	<-dedupedDone
 	<-errorsDone
 	// Print results log
-	progress.Stop()
+	if liveprogressErr == nil {
+		liveprogress.Stop(true)
+	}
 	var (
 		totalSaved cunits.Bits
 		totalFiles int
@@ -106,8 +131,9 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 type concurrentToolBox struct {
 	tokenPool          *semaphore.Weighted
 	waitGroup          *sync.WaitGroup
-	progress           *uiprogress.Progress
-	processedReporting func() bool
+	stdout             io.Writer
+	barConfig          liveprogress.BarConfig
+	processedReporting func()
 	dedupedChan        chan<- dedupedReport
 	errChan            chan<- error
 }
@@ -142,7 +168,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 		fileSize := cunits.ImportInByte(float64(refFile.Infos.Size()))
 		if fileSize < minSize {
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' size (%s) is lower than minSize (%s): skipping\n",
+				fmt.Fprintf(concurrent.stdout, "Reference file '%s' size (%s) is lower than minSize (%s): skipping\n",
 					refFile.FullPath, fileSize, minSize)
 			}
 			return
@@ -154,7 +180,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 		return
 	}
 	if debug {
-		fmt.Fprintf(concurrent.progress.Bypass(), "Reference file '%s' has %d size candidate(s): %s\n",
+		fmt.Fprintf(concurrent.stdout, "Reference file '%s' has %d size candidate(s): %s\n",
 			refFile.FullPath, len(sizeCandidates), sizeCandidates)
 	}
 	// start several inodes checks to discard unfitted candidates
@@ -173,7 +199,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 		// in case refFile already has hardlinks, check if candidate inode is the same as reffile inode
 		if refFileSystem.Nlink > 1 && candidateSystem.Ino == refFileSystem.Ino {
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' is already a hardlink of '%s': skipping\n",
+				fmt.Fprintf(concurrent.stdout, "File '%s' is already a hardlink of '%s': skipping\n",
 					candidate.FullPath, refFile.FullPath)
 			}
 			continue
@@ -182,39 +208,39 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 		if candidateSystem.Uid != refFileSystem.Uid {
 			if !force {
 				if debug {
-					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): skipping (activate force mode to retain it)\n",
+					fmt.Fprintf(concurrent.stdout, "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): skipping (activate force mode to retain it)\n",
 						candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
 				}
 				continue
 			}
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): keeping it anyway (force mode is on)\n",
+				fmt.Fprintf(concurrent.stdout, "File '%s' UID (%d) is not the same as ref file '%s' UID (%d): keeping it anyway (force mode is on)\n",
 					candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
 			}
 		}
 		if candidateSystem.Gid != refFileSystem.Gid {
 			if !force {
 				if debug {
-					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): skipping (activate force mode to retain it)\n",
+					fmt.Fprintf(concurrent.stdout, "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): skipping (activate force mode to retain it)\n",
 						candidate.FullPath, candidateSystem.Uid, refFile.FullPath, refFileSystem.Uid)
 				}
 				continue
 			}
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): keeping it anyway (force mode is on)\n",
+				fmt.Fprintf(concurrent.stdout, "File '%s' GID (%d) is not the same as ref file '%s' GID (%d): keeping it anyway (force mode is on)\n",
 					candidate.FullPath, candidateSystem.Gid, refFile.FullPath, refFileSystem.Gid)
 			}
 		}
 		if candidateSystem.Mode != refFileSystem.Mode {
 			if !force {
 				if debug {
-					fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): skipping (activate force mode to retain it)\n",
+					fmt.Fprintf(concurrent.stdout, "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): skipping (activate force mode to retain it)\n",
 						candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
 				}
 				continue
 			}
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): keeping it anyway (force mode is on)\n",
+				fmt.Fprintf(concurrent.stdout, "File '%s' mode (%o) is not the same as ref file '%s' mode (%o): keeping it anyway (force mode is on)\n",
 					candidate.FullPath, candidateSystem.Mode, refFile.FullPath, refFileSystem.Mode)
 			}
 		}
@@ -229,7 +255,7 @@ func processFileFindCandidates(refFile, pathBTree *FileInfos, concurrent concurr
 	processed = false
 	// final candidates ready
 	if debug {
-		fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' has %d final candidate(s) for dedup/hardlinking: %s\n",
+		fmt.Fprintf(concurrent.stdout, "File '%s' has %d final candidate(s) for dedup/hardlinking: %s\n",
 			refFile.FullPath, len(finalCandidates), finalCandidates)
 	}
 	// Start a goroutine as handler for this file (no token used as this goroutine will not produce IO itself but will launch others goroutines that will)
@@ -261,22 +287,17 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	_ = concurrent.tokenPool.Acquire(context.Background(), 1) // no err check as error can only come from expired context
 	// create the progress bar for this particular file
 	endStatus := ""
-	totalSize := cunits.ImportInByte((float64(refFile.Infos.Size() * int64(len(candidates)+1))) + 1) // add one last fake byte to trigger print of end message
-	fileBar := concurrent.progress.AddBar(int(totalSize.Byte())).AppendCompleted()
-	fileBar.Empty = ' '
-	fileBar.AppendFunc(func(b *uiprogress.Bar) string {
-		if endStatus != "" {
-			return endStatus
-		}
-		return fmt.Sprintf("%s + %d candidate(s) (total hashing: %s/%s)",
-			refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
-	})
-	var totalWritten atomic.Uint64
-	updateProgress := func(add int) {
-		if err := fileBar.Set(int(totalWritten.Add(uint64(add)))); err != nil {
-			fmt.Fprintf(concurrent.progress.Bypass(), "ERROR: failed to set progress bar for '%s': %s", refFile.Infos.Name(), err)
-		}
-	}
+	totalSize := cunits.ImportInByte((float64(refFile.Infos.Size() * int64(len(candidates)+1))))
+	fileBar := liveprogress.AddBar(uint64(totalSize.Byte()), concurrent.barConfig,
+		liveprogress.AppendPercent(),
+		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
+			if endStatus != "" {
+				return endStatus
+			}
+			return fmt.Sprintf("%s + %d candidate(s) (total hashing: %s/%s)",
+				refFile.Infos.Name(), len(candidates), cunits.ImportInByte(float64(b.Current())), totalSize)
+		}),
+	)
 	// prepare to compute checksums for reFile and its candidates
 	var (
 		originalHash            []byte
@@ -289,12 +310,12 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	go func() {
 		defer concurrent.tokenPool.Release(1)
 		defer fileProcessingWaitGroup.Done()
-		if originalHash, err = computeHash(refFile.FullPath, updateProgress); err != nil {
+		if originalHash, err = computeHash(refFile.FullPath, fileBar.CurrentAdd); err != nil {
 			concurrent.errChan <- fmt.Errorf("failed to compute hash of ref File %s: %w", refFile.FullPath, err)
 			return
 		}
 		if debug {
-			fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
+			fmt.Fprintf(concurrent.stdout, "SHA256 computed for '%s': %x\n", refFile.FullPath, originalHash)
 		}
 	}()
 	// compute checksums of the candidates in weighted goroutines too
@@ -305,12 +326,12 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 		go func(localCandidate *FileInfos, target *[]byte) {
 			defer concurrent.tokenPool.Release(1)
 			defer fileProcessingWaitGroup.Done()
-			if *target, err = computeHash(localCandidate.FullPath, updateProgress); err != nil {
+			if *target, err = computeHash(localCandidate.FullPath, fileBar.CurrentAdd); err != nil {
 				concurrent.errChan <- fmt.Errorf("failed to compute hash of candidate File %s: %w", localCandidate.FullPath, err)
 				return
 			}
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
+				fmt.Fprintf(concurrent.stdout, "SHA256 computed for '%s': %x\n", localCandidate.FullPath, *target)
 			}
 		}(candidate, &(candidatesHashes[candidateIndex]))
 	}
@@ -326,7 +347,6 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 		endStatus = fmt.Sprintf("%s: %d/%d candidates could be hardlinked (potential saving of %s)",
 			refFile.Infos.Name(), len(deduped), len(candidates), cunits.ImportInByte(float64(refFile.Infos.Size()*int64(len(deduped)))))
 	}
-	fileBar.Incr() // add the last fake byte to trigger one last update of the append msg
 	// send dedup report if any files deduped
 	if len(deduped) > 0 {
 		concurrent.dedupedChan <- dedupedReport{
@@ -336,7 +356,7 @@ func processFileEvaluateCandidates(refFile *FileInfos, candidates FileInfosList,
 	}
 }
 
-func computeHash(path string, reportWritten func(add int)) (hash []byte, err error) {
+func computeHash(path string, reportWritten func(add uint64)) (hash []byte, err error) {
 	// Prepare the hasher
 	hashReporter := hasherProgress{
 		hasher: sha256.New(),
@@ -358,13 +378,13 @@ func computeHash(path string, reportWritten func(add int)) (hash []byte, err err
 
 type hasherProgress struct {
 	hasher hash.Hash
-	report func(add int)
+	report func(add uint64)
 }
 
 func (wp hasherProgress) Write(p []byte) (n int, err error) {
 	n, err = wp.hasher.Write(p)
 	if err == nil || errors.Is(err, io.EOF) {
-		wp.report(n)
+		wp.report(uint64(n))
 	}
 	return
 }
@@ -374,14 +394,14 @@ func processFileDedupCandidates(refFile *FileInfos, originalHash []byte, candida
 	for candidateIndex, candidateHash := range candidatesHashes {
 		if !bytes.Equal(originalHash, candidateHash) {
 			if debug {
-				fmt.Fprintf(concurrent.progress.Bypass(), "File '%s' checksum does not match ref file '%s' checksum: skipping\n",
+				fmt.Fprintf(concurrent.stdout, "File '%s' checksum does not match ref file '%s' checksum: skipping\n",
 					candidates[candidateIndex].FullPath, refFile.FullPath)
 			}
 			continue
 		}
 		// Same file found !
 		if apply {
-			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
+			fmt.Fprintf(concurrent.stdout, "Match found for '%s': '%s' has the same checksum: replacing by a hard link\n",
 				refFile.FullPath, candidates[candidateIndex].FullPath)
 			if err := os.Remove(candidates[candidateIndex].FullPath); err != nil {
 				concurrent.errChan <- fmt.Errorf("can not make hardlink against '%s': failed to remove '%s': %s", refFile.FullPath, candidates[candidateIndex].FullPath, err)
@@ -393,7 +413,7 @@ func processFileDedupCandidates(refFile *FileInfos, originalHash []byte, candida
 			}
 			deduped = append(deduped, candidates[candidateIndex])
 		} else {
-			fmt.Fprintf(concurrent.progress.Bypass(), "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
+			fmt.Fprintf(concurrent.stdout, "Match found for '%s': '%s' has the same checksum: it could be replaced by a hard link\n",
 				refFile.FullPath, candidates[candidateIndex].FullPath)
 			deduped = append(deduped, candidates[candidateIndex])
 		}
