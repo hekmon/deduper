@@ -28,7 +28,7 @@ func dedup(pathATree, pathBTree *FileInfos, totalAFiles int64, tokenPool *semaph
 	barConfig := liveprogress.DefaultConfig
 	barConfig.Width = 30
 	barConfig.Empty = ' '
-	globalProgress := liveprogress.AddBar(uint64(totalAFiles), barConfig,
+	globalProgress := liveprogress.SetMainLineAsBar(uint64(totalAFiles), barConfig,
 		liveprogress.AppendPercent(),
 		liveprogress.AppendDecorator(func(b *liveprogress.Bar) string {
 			return fmt.Sprintf(" Global progress: %d/%d files processed", b.Current(), totalAFiles)
